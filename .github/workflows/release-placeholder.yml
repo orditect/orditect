@@ -1,0 +1,25 @@
+name: release-placeholder
+on:
+  push:
+    tags: ["placeholder-v*-*"]
+
+permissions:
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Resolve package dir from tag
+        id: pkg
+        run: |
+          NAME="${GITHUB_REF_NAME#placeholder-v*-}"
+          echo "dir=packages/_placeholder/$NAME" >> "$GITHUB_OUTPUT"
+      - run: pip install build && python -m build ${{ steps.pkg.outputs.dir }}
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ steps.pkg.outputs.dir }}/dist
