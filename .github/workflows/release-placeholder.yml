@@ -22,4 +22,4 @@ jobs:
       - run: pip install build && python -m build ${{ steps.pkg.outputs.dir }}
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ${{ steps.pkg.outputs.dir }}/dist
+          password: ${{ secrets.PYPI_API_TOKEN }}
