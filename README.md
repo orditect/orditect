@@ -1,10 +1,4 @@
-好的，这是根目录下英文和中文两个版本的 `README.md`，按照“简洁、概述、导航”的原则编写，详细设计内容已指向 `docs/` 目录。
 
----
-
-## 英文版本 (English)
-
-```markdown
 # Orditect — Deterministic Governance for AI Workflows
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
@@ -114,13 +108,8 @@ All structural changes (models, Lua ARGV, terms) must follow the version review 
 ## License
 
 This project is licensed under the **Apache‑2.0** License. See the [LICENSE](LICENSE) file for details.
-```
 
----
 
-## 中文版本 (Chinese)
-
-```markdown
 # Orditect — AI 工作流的确定性治理框架
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
@@ -230,4 +219,3 @@ pip install ./packages/core ./packages/flow ./packages/stream ./packages/protoco
 ## 许可证
 
 本项目采用 **Apache‑2.0** 许可证。详见 [LICENSE](LICENSE) 文件。
-```
