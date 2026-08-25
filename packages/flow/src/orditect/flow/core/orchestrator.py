@@ -58,6 +58,7 @@ class TaskOrchestrator:
             snapshot_sink: Any = None,
             snapshot_query: Any = None,                 # F3
             reuse_terminal_words: frozenset[str] | None = None,  # F3
+            dependency_governor: Any = None,            # v0.1.1: passive dep governance
     ):
         self.storage = storage
         self.governor = governor
@@ -69,6 +70,8 @@ class TaskOrchestrator:
             reuse_terminal_words=reuse_terminal_words,  # F3
         )
         self.lifecycle = TaskLifecycle(storage, self.state_machine)
+        # v0.1.1: None = every dependency-governance path stays inert.
+        self.dependency_governor = dependency_governor
         self._bg_tasks: set = set()
 
     async def submit(

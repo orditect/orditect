@@ -154,6 +154,8 @@ from orditect.flow.snapshot import (
 
 # Recovery (F4)
 from orditect.flow.recovery import RecoveryService, ReuseDecision, TaskFactory
+# Dependency governance (v0.1.1)
+from orditect.flow.governance import DependencyGovernor
 
 __all__ = [
 
@@ -225,4 +227,5 @@ __all__ = [
     "RecoveryService",
     "ReuseDecision",
     "TaskFactory",
+    "DependencyGovernor",
 ]
