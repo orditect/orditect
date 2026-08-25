@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+src/orditect/adapter/memory/__init__.py
+src/orditect/adapter/memory/py.typed
+src/orditect/adapter/memory/store.py
+src/orditect/adapter/memory/parts/__init__.py
+src/orditect/adapter/memory/parts/audit.py
+src/orditect/adapter/memory/parts/content.py
+src/orditect/adapter/memory/parts/result.py
+src/orditect/adapter/memory/parts/snapshot.py
+src/orditect_adapter_memory.egg-info/PKG-INFO
+src/orditect_adapter_memory.egg-info/SOURCES.txt
+src/orditect_adapter_memory.egg-info/dependency_links.txt
+src/orditect_adapter_memory.egg-info/requires.txt
+src/orditect_adapter_memory.egg-info/top_level.txt
+tests/test_conformance.py
+tests/test_snapshot_semantics.py

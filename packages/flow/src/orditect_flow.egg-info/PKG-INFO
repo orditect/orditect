@@ -1,0 +1,26 @@
+Metadata-Version: 2.4
+Name: orditect-flow
+Version: 0.1.0
+Summary: Async task orchestration and lifecycle management for the Orditect ecosystem: recursive composite task governance
+Author: Orditect Contributors
+License: Apache-2.0
+Project-URL: Homepage, https://github.com/orditect/orditect
+Project-URL: Repository, https://github.com/orditect/orditect
+Keywords: task-orchestration,workflow,recursive,async,fastapi
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries :: Application Frameworks
+Classifier: Typing :: Typed
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: redis<6,>=5.0
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: croniter>=2.0.0
+Requires-Dist: orditect-core<0.2,>=0.1
+Requires-Dist: orditect-protocol<0.2,>=0.1
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.26; extra == "dev"
+Requires-Dist: fastapi>=0.115.0; extra == "dev"
+Requires-Dist: uvicorn>=0.30.0; extra == "dev"
