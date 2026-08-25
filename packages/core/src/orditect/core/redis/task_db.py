@@ -45,6 +45,18 @@ from orditect.core.task.status import TaskStatus, can_transfer
 #: Default terminal status set (vocabulary when using core standalone)
 DEFAULT_TERMINAL_STATUSES: tuple[str, ...] = ("completed", "failed", "cancelled")
 
+import logging
+logger = logging.getLogger(__name__)
+
+#: Attached-key suffixes for dependency governance (v0.1.1). Every attached
+#: key lives under the owning task's hot-record key and shares its expiry
+#: instant (synced on write, followed up on update_task).
+_ATTACHED_KEY_SUFFIXES: tuple[str, ...] = (
+    "active_children",
+    "remaining_deps",
+    "cancel_votes",
+    "result_consumers",
+)
 
 class TaskRedisDB(RedisDB):
     """
@@ -325,6 +337,10 @@ Raises:
           index lease advances with the same measure (fixes "status update extends short
           TTL task to default_expire_time");
         - Explicit value: advance expiry instant (consistent with previous behavior).
+
+        v0.1.1: after a successful update, attached dependency-governance keys
+        (active_children / remaining_deps / cancel_votes / result_consumers)
+        follow the hot record's expiry instant (best-effort, logged only).
         """
         # B1: None → -1 (Lua side reads TTL to parse remaining expiry, fallback default when no TTL)
         ex = int(expiry) if expiry is not None else -1
@@ -370,6 +386,10 @@ Raises:
             if err == "INVALID_TRANSFER":
                 raise InvalidStatusTransferError(f"invalid status transfer for task_id={task_id}")
             raise RuntimeError(f"update_task failed: {err}")
+
+        # v0.1.1: attached dep-governance keys share the hot record's expiry
+        # instant; follow it up (best-effort, failures logged only).
+        await self._follow_attached_keys_ttl(task_id, ex)
 
     async def update_task_field(self, task_id: str, field: str, value, expiry=None):
         """Update single field (convenience wrapper for update_task)."""
@@ -433,3 +453,180 @@ Raises:
             except Exception:
                 out.append({})
         return out
+
+    # ---------- dependency-governance primitives (v0.1.1) ----------
+    # Thin wrappers over plain Redis commands. No Lua involvement: the
+    # v0.1.1 frozen-script commitment forbids any change under lua/.
+
+    def _active_children_key(self, parent_task_id: str) -> str:
+        return f"{self._task_key(parent_task_id)}:active_children"
+
+    def _remaining_deps_key(self, task_id: str) -> str:
+        return f"{self._task_key(task_id)}:remaining_deps"
+
+    def _cancel_votes_key(self, task_id: str) -> str:
+        return f"{self._task_key(task_id)}:cancel_votes"
+
+    def _result_consumers_key(self, task_id: str) -> str:
+        return f"{self._task_key(task_id)}:result_consumers"
+
+    async def _sync_attached_ttl(self, owner_task_id: str, keys: list[str]) -> None:
+        """Best-effort TTL sync: attached keys expire with the owner hot record.
+
+        EXPIRE on a missing key is a harmless no-op (returns 0). Failures are
+        logged, never raised — the write itself already succeeded.
+        """
+        try:
+            ttl = await self.client.ttl(self._task_key(owner_task_id))
+            if ttl <= 0:
+                return
+            async with self.client.pipeline(transaction=False) as pipe:
+                for key in keys:
+                    pipe.expire(key, ttl)
+                await pipe.execute()
+        except Exception as e:
+            logger.warning(
+                f"attached-key TTL sync failed (ignored): {owner_task_id}, {e}"
+            )
+
+    async def _follow_attached_keys_ttl(self, task_id: str, expiry: int) -> None:
+        """Advance attached keys' TTL after update_task moved the hot record's TTL.
+
+        Best-effort: failures are logged, never raised. EXPIRE on missing
+        keys is a no-op, so tasks without dependency keys pay no semantic cost.
+        """
+        try:
+            ex = expiry
+            if ex < 0:
+                # preserve mode: Lua resolved the remaining TTL internally
+                ex = await self.client.ttl(self._task_key(task_id))
+            if ex <= 0:
+                return
+            tkey = self._task_key(task_id)
+            async with self.client.pipeline(transaction=False) as pipe:
+                for suffix in _ATTACHED_KEY_SUFFIXES:
+                    pipe.expire(f"{tkey}:{suffix}", ex)
+                await pipe.execute()
+        except Exception as e:
+            logger.warning(
+                f"attached-key TTL follow failed (ignored): {task_id}, {e}"
+            )
+
+    # ----- active-children notification set (parent side) -----
+
+    async def sadd_active_child(self, parent_id: str, child_id: str) -> None:
+        """Add child_id to the parent's active-children notification set."""
+        key = self._active_children_key(parent_id)
+        await self.client.sadd(key, child_id)
+        await self._sync_attached_ttl(parent_id, [key])
+
+    async def srem_active_child(self, parent_id: str, child_id: str) -> None:
+        """Remove child_id from the parent's active-children set (idempotent)."""
+        await self.client.srem(self._active_children_key(parent_id), child_id)
+
+    async def get_active_children(self, parent_id: str) -> list[str]:
+        """List the parent's active-children set (sorted for determinism)."""
+        members = await self.client.smembers(self._active_children_key(parent_id))
+        return sorted(members)
+
+    # ----- remaining-deps counter (child side) -----
+
+    async def set_remaining_deps(self, task_id: str, n: int) -> None:
+        """Initialize the child's remaining-deps counter (full rewrite, retry-safe)."""
+        key = self._remaining_deps_key(task_id)
+        await self.client.set(key, str(int(n)))
+        await self._sync_attached_ttl(task_id, [key])
+
+    async def decr_remaining_deps(self, task_id: str) -> int:
+        """Decrement the counter; returns the new value.
+
+        DECR on a missing key creates it at -1 (fault-tolerance contract:
+        callers treat negatives as non-ready, log, and move on). A TTL sync
+        follows so a ghost-created counter still expires with the hot record.
+        """
+        key = self._remaining_deps_key(task_id)
+        value = int(await self.client.decr(key))
+        await self._sync_attached_ttl(task_id, [key])
+        return value
+
+    async def get_remaining_deps(self, task_id: str) -> int:
+        """Read the counter (0 when absent)."""
+        raw = await self.client.get(self._remaining_deps_key(task_id))
+        try:
+            return int(raw or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    async def list_ready_dep_tasks(self, *, status: str | None = None) -> list[str]:
+        """SCAN remaining-deps counters; return task_ids whose counter <= 0.
+
+        Args:
+            status: optional status-word filter applied against the hot
+                records (vocabulary-neutral, T6: the word is injected by the
+                caller, never embedded here). Missing records and mismatched
+                statuses are excluded.
+
+        Performance boundary: SCAN-based; intended for <=10k-scale task sets.
+        Callers should poll no faster than ~100ms.
+        """
+        suffix = ":remaining_deps"
+        prefix = f"{self.task_key_prefix}:"
+        pattern = f"{prefix}*{suffix}"
+        keys: list[str] = []
+        async for key in self.client.scan_iter(match=pattern, count=500):
+            keys.append(key)
+        if not keys:
+            return []
+        raws = await self.client.mget(keys)
+        candidates: list[str] = []
+        for key, raw in zip(keys, raws):
+            try:
+                if int(raw or 0) <= 0:
+                    candidates.append(key[len(prefix):-len(suffix)])
+            except (TypeError, ValueError):
+                continue
+        if status is None or not candidates:
+            return sorted(candidates)
+        records = await self.bulk_get_tasks(candidates)
+        return sorted(
+            tid for tid, rec in zip(candidates, records)
+            if rec.get("status") == status
+        )
+
+    # ----- cancel-vote set (child side) -----
+
+    async def vote_and_check_threshold(
+        self, child_id: str, parent_id: str, threshold: int
+    ) -> bool:
+        """Cast one cancel vote and atomically test the threshold.
+
+        SADD + SCARD run inside one MULTI/EXEC transaction (single key,
+        cluster-slot safe), so concurrent voters each observe an accurate
+        post-vote count: exactly one caller observes the threshold being
+        reached. Repeat votes from the same parent are idempotent.
+        """
+        key = self._cancel_votes_key(child_id)
+        async with self.client.pipeline(transaction=True) as pipe:
+            pipe.sadd(key, parent_id)
+            pipe.scard(key)
+            _, count = await pipe.execute()
+        await self._sync_attached_ttl(child_id, [key])
+        return int(count) >= int(threshold)
+
+    async def get_cancel_votes(self, child_id: str) -> list[str]:
+        """List the child's cancel-vote set (sorted for determinism)."""
+        members = await self.client.smembers(self._cancel_votes_key(child_id))
+        return sorted(members)
+
+    async def clear_cancel_votes(self, child_id: str) -> None:
+        """Delete the child's cancel-vote set (called on the child's terminal)."""
+        await self.client.delete(self._cancel_votes_key(child_id))
+
+    # ----- result-consumer dedup set -----
+
+    async def sadd_result_consumer(self, task_id: str, consumer_id: str) -> bool:
+        """Register a result consumer; True = first time (dedup key)."""
+        key = self._result_consumers_key(task_id)
+        added = int(await self.client.sadd(key, consumer_id))
+        await self._sync_attached_ttl(task_id, [key])
+        return added == 1

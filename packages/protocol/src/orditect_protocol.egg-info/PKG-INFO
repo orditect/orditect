@@ -26,31 +26,88 @@ Requires-Dist: pytest-asyncio>=0.26; extra == "conformance"
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-`orditect-protocol` defines the narrow protocols (interfaces) and data models
-that decouple the Orditect frameworks (`orditect-core` / `orditect-flow` /
-`orditect-stream`) from concrete storage backends.
+`orditect-protocol` is the **connection contract between the Orditect
+frameworks and storage backends**. It defines *what is stored and how it is
+retrieved* — never *how a backend implements it*.
 
-## Scope
+It is the layer that lets `orditect-core` / `orditect-flow` /
+`orditect-stream` store content, audit events, results, and execution
+snapshots against one contract, and lets any backend (PostgreSQL, MinIO,
+Milvus, memory, local JSON, ...) plug in by implementing the same contract.
 
-**In scope:**
-- Contract definitions (Protocols) for four storage domains:
-  Content / Audit / Result / Snapshot.
-- Shared data models (TaskPointer, TaskSnapshot, AuditEvent, ...).
-- Conformance test kit (verifies any backend implementation honors the contracts).
+## Position in the Orditect ecosystem
+```
+orditect-core / orditect-flow / orditect-stream
+        |  store & query via this contract
+        v
+orditect-protocol        <-- THIS PACKAGE (contracts only, zero implementation)
+        |  implemented by
+        v
+storage adapters: orditect-adapter-memory (open, reference) /
+                  PostgreSQL / MinIO / Milvus / ... (commercial)
+```
 
-**Out of scope:**
-- No storage implementation (this package is contract-only).
-- No governance hot path (semaphore / quota / task state stays in
-  `orditect-core`, pinned to Redis).
-- No business query semantics (no WHERE-style DSL; mechanism fields only).
+**The governance hot path is deliberately NOT here.** Semaphores, token
+buckets, quotas, task state, and the lineage hot index live in
+`orditect-core`, pinned to Redis (millisecond-sensitive, Lua-atomic). This
+package governs only the content side: where content, snapshots, audit, and
+results go.
 
-## Layout
+## Boundary discipline (red lines)
 
-- `orditect.protocol.models` — data models (B2)
-- `orditect.protocol.domains` — storage domain protocols (B4-B6)
-- `orditect.protocol.conformance` — conformance test kit (B7)
-- `docs/terms.md` — consistency terms (B3)
+1. **Zero implementation** — contracts and models only; no storage logic.
+2. **Zero Redis dialect** — no ZSET / Lua / TTL keywords in any signature or
+   docstring; terms speak of leases, terminal states, idempotency keys.
+3. **Zero business semantics** — no WHERE-style business query DSL; only
+   mechanism fields (time range, pagination, status-as-opaque-string).
 
-## Status
+## The four domains
 
-v0.1.0 (B0 skeleton). Contracts are being bootstrapped; see CHANGELOG.
+Each domain is a narrow sink/query protocol pair. An implementation declares
+the half-domains it supports via `CapabilitySet`; the rest must raise
+`UnsupportedCapabilityError` (never silently no-op, term T8).
+
+| Domain | Sink | Query | Purpose |
+|---|---|---|---|
+| Content  | `ContentWriter`  | `ContentReader`  | Pointer-ized content bodies (all modalities) |
+| Audit    | `AuditWriter`    | `AuditReader`    | Append-only idempotent event log |
+| Result   | `ResultWriter`   | `ResultReader`   | Stream manifests with true TTL |
+| Snapshot | `SnapshotWriter` | `SnapshotReader` | Execution snapshots + tree/version queries |
+
+## Consistency terms
+
+Eleven normative terms (lease model, terminal irreversibility, idempotency,
+pointer discipline, vocabulary neutrality, clock discipline, explicit
+capability, observation non-blocking, concurrency atomicity, execution
+identity alignment, cross-media alignment) are frozen in
+[`docs/terms.md`](docs/terms.md). Every protocol method's docstring references
+the terms it enforces.
+
+## Implementing an adapter
+
+1. Implement the half-domains you support, structured as per-domain parts
+   (see `orditect-adapter-memory` for the reference structure).
+2. Expose a `CapabilitySet` declaring them.
+3. Run the conformance kit in your own test suite:
+
+```python
+from orditect.protocol.conformance import run_conformance
+
+def test_conformance():
+    report = run_conformance(my_store.snapshot)
+    assert report.failed == 0, report.summary()
+```
+
+The kit skips undeclared half-domains (T8) and fails on any contract
+violation. **Passing the kit is the only compatibility certification.**
+
+## Versioning
+
+Independent version line. Terms changes are minor/major bumps with a
+CHANGELOG entry. The 1.0 freeze requires a second real backend (a production
+relational adapter) passing the full conformance kit.
+
+## License
+
+Apache-2.0
+```
