@@ -1,0 +1,6 @@
+redis<6,>=5.0
+orditect-protocol<0.2,>=0.1
+
+[dev]
+pytest>=8.0
+pytest-asyncio>=0.26

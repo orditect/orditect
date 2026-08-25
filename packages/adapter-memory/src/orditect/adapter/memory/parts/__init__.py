@@ -1,0 +1,1 @@
+"""Per-domain in-memory parts."""

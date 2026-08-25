@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/orditect-adapter-memory.iml" filepath="$PROJECT_DIR$/.idea/orditect-adapter-memory.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/orditect-core.iml" filepath="$PROJECT_DIR$/.idea/orditect-core.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/orditect-flow.iml" filepath="$PROJECT_DIR$/.idea/orditect-flow.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/orditect-protocol.iml" filepath="$PROJECT_DIR$/.idea/orditect-protocol.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/orditect-stream.iml" filepath="$PROJECT_DIR$/.idea/orditect-stream.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/orditect_1.iml" filepath="$PROJECT_DIR$/.idea/orditect_1.iml" />
+    </modules>
+  </component>
+</project>

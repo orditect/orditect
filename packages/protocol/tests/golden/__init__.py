@@ -1,0 +1,1 @@
+"""Golden schema snapshot tests."""

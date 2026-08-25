@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orditect-core"
+version = "0.1.0"
+description = "Async task governance engine for the Orditect ecosystem: Redis task store, distributed lease semaphore & token bucket"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Orditect Contributors" },
+]
+keywords = ["redis", "semaphore", "rate-limit", "task-queue", "async"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = [
+    "redis>=5.0,<6",
+    "orditect-protocol>=0.1,<0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.26",
+]
+
+[project.urls]
+Homepage = "https://github.com/orditect/orditect"
+Repository = "https://github.com/orditect/orditect"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"orditect.core" = ["py.typed", "lua/*.lua"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-W ignore::pytest.PytestDeprecationWarning"
+markers = [
+    "unit: pure logic tests, no external dependencies",
+    "pinning: behavior pinning tests (require Redis, default db15)",
+    "integration: acceptance tests (require Redis)",
+    "chaos: destructive tests, run independently (pytest -m chaos)",
+]

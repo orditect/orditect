@@ -1,0 +1,56 @@
+Metadata-Version: 2.4
+Name: orditect-protocol
+Version: 0.1.0
+Summary: Storage interaction contracts for the Orditect ecosystem: unified protocols for content, audit, result, and snapshot storage backends
+Author: Orditect Contributors
+License: Apache-2.0
+Project-URL: Homepage, https://github.com/orditect/orditect-protocol
+Project-URL: Repository, https://github.com/orditect/orditect-protocol
+Keywords: storage,protocol,adapter,fastapi,async
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Software Development :: Libraries :: Application Frameworks
+Classifier: Typing :: Typed
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: pydantic<3,>=2.5
+Provides-Extra: conformance
+Requires-Dist: pytest>=8.0; extra == "conformance"
+Requires-Dist: pytest-asyncio>=0.26; extra == "conformance"
+
+# orditect-protocol
+
+**Storage interaction contracts for the Orditect ecosystem**
+
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+
+`orditect-protocol` defines the narrow protocols (interfaces) and data models
+that decouple the Orditect frameworks (`orditect-core` / `orditect-flow` /
+`orditect-stream`) from concrete storage backends.
+
+## Scope
+
+**In scope:**
+- Contract definitions (Protocols) for four storage domains:
+  Content / Audit / Result / Snapshot.
+- Shared data models (TaskPointer, TaskSnapshot, AuditEvent, ...).
+- Conformance test kit (verifies any backend implementation honors the contracts).
+
+**Out of scope:**
+- No storage implementation (this package is contract-only).
+- No governance hot path (semaphore / quota / task state stays in
+  `orditect-core`, pinned to Redis).
+- No business query semantics (no WHERE-style DSL; mechanism fields only).
+
+## Layout
+
+- `orditect.protocol.models` — data models (B2)
+- `orditect.protocol.domains` — storage domain protocols (B4-B6)
+- `orditect.protocol.conformance` — conformance test kit (B7)
+- `docs/terms.md` — consistency terms (B3)
+
+## Status
+
+v0.1.0 (B0 skeleton). Contracts are being bootstrapped; see CHANGELOG.
