@@ -1,0 +1,111 @@
+{
+  "$defs": {
+    "TaskPointer": {
+      "description": "Pointer to content stored in an external backend.\n\nAttributes:\n    backend: Opaque storage backend identifier (no business semantics).\n    key: Backend-specific addressing key (path, row id, vector id, ...).\n    metadata: Optional free-form metadata (content_type, size, ...).",
+      "properties": {
+        "backend": {
+          "description": "Opaque storage backend identifier (T6).",
+          "title": "Backend",
+          "type": "string"
+        },
+        "key": {
+          "description": "Backend-specific addressing key (path, row id, vector id, ...).",
+          "title": "Key",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "description": "Optional free-form metadata (content_type, size, ...). Omitted when None.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "backend",
+        "key"
+      ],
+      "title": "TaskPointer",
+      "type": "object"
+    }
+  },
+  "$id": "https://orditect.dev/schemas/snapshot/0.1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Execution snapshot of a single task node.\n\nAttributes:\n    task_id: Task identifier (deterministic-ID convention may apply).\n    step: Step name within the task (opaque).\n    execution_id: Execution generation identifier. A new execution of the\n        same task (resume / rerun) uses a new execution_id, so multiple\n        versions of the same node coexist for time-travel queries.\n    parent_task_id: Parent task in the recursive lineage (None = root).\n    status: Opaque status string (protocol embeds no vocabulary).\n    input_pointer / output_pointer: Pointer-ized input/output content.\n    error: Error message if the execution failed (opaque text).\n    cost: Free-form cost metrics (token usage, USD, ...; business-defined).\n    model: Optional model identifier (business-defined).\n    created_at / updated_at: Record timestamps.\n    expire_at: Absolute expiry instant for the lease term (None = no expiry).",
+  "properties": {
+    "cost": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Free-form cost metrics (business-defined). Omitted when None.",
+      "type": "object"
+    },
+    "created_at": {
+      "description": "Record creation time, timezone-aware UTC (T7).",
+      "format": "date-time",
+      "pattern": "(Z|[+-]\\d{2}:\\d{2})$",
+      "title": "Created At",
+      "type": "string"
+    },
+    "error": {
+      "description": "Error message if the execution failed (opaque text). Omitted when None.",
+      "type": "string"
+    },
+    "execution_id": {
+      "description": "Execution generation identity (T11). A new execution of the same task (resume / rerun) uses a new execution_id; multiple generations coexist.",
+      "title": "Execution Id",
+      "type": "string"
+    },
+    "expire_at": {
+      "description": "Absolute expiry instant for the lease term (T1); readers filter lazily. Omitted when None.",
+      "format": "date-time",
+      "pattern": "(Z|[+-]\\d{2}:\\d{2})$",
+      "type": "string"
+    },
+    "input_pointer": {
+      "$ref": "#/$defs/TaskPointer",
+      "description": "Pointer-ized input content (T5); never inline payloads. Omitted when None."
+    },
+    "model": {
+      "description": "Optional model identifier (business-defined). Omitted when None.",
+      "type": "string"
+    },
+    "output_pointer": {
+      "$ref": "#/$defs/TaskPointer",
+      "description": "Pointer-ized output content (T5). Omitted when None."
+    },
+    "parent_task_id": {
+      "description": "Parent task in the recursive lineage (None = root). Omitted when None.",
+      "type": "string"
+    },
+    "status": {
+      "default": "",
+      "description": "Opaque status string (T6); the protocol embeds no vocabulary.",
+      "title": "Status",
+      "type": "string"
+    },
+    "step": {
+      "description": "Step name within the task (opaque).",
+      "title": "Step",
+      "type": "string"
+    },
+    "task_id": {
+      "description": "Task identifier (deterministic-ID conventions may apply).",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "updated_at": {
+      "description": "Record last-update time, timezone-aware UTC (T7).",
+      "format": "date-time",
+      "pattern": "(Z|[+-]\\d{2}:\\d{2})$",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id",
+    "step",
+    "execution_id"
+  ],
+  "title": "TaskSnapshot",
+  "type": "object",
+  "x-stability": "ratifying"
+}

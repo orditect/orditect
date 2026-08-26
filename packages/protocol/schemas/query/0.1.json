@@ -1,0 +1,75 @@
+{
+  "$defs": {
+    "Page": {
+      "description": "Pagination parameters.\n\nAttributes:\n    limit: Maximum number of records to return (must be > 0).\n    offset: Number of records to skip (>= 0).",
+      "properties": {
+        "limit": {
+          "default": 100,
+          "description": "Maximum number of records to return (> 0).",
+          "exclusiveMinimum": 0,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "description": "Number of records to skip (>= 0).",
+          "minimum": 0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "title": "Page",
+      "type": "object"
+    },
+    "Sort": {
+      "description": "Ordering parameters.\n\nAttributes:\n    field: Mechanism field to sort by (e.g. \"created_at\", \"expire_at\").\n    direction: asc / desc.",
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/SortDirection",
+          "default": "desc",
+          "description": "Sort direction (asc / desc)."
+        },
+        "field": {
+          "default": "created_at",
+          "description": "Mechanism field to sort by; must be within the contract whitelist for the queried domain.",
+          "title": "Field",
+          "type": "string"
+        }
+      },
+      "title": "Sort",
+      "type": "object"
+    },
+    "SortDirection": {
+      "description": "Sort direction for query results.",
+      "enum": [
+        "asc",
+        "desc"
+      ],
+      "title": "SortDirection",
+      "type": "string"
+    },
+    "TimeRange": {
+      "description": "Absolute time range filter (mechanism field).\n\nAttributes:\n    start: Inclusive range start (None = unbounded).\n    end: Exclusive range end (None = unbounded).",
+      "properties": {
+        "end": {
+          "description": "Exclusive range end, timezone-aware UTC (None = unbounded). Omitted when None.",
+          "format": "date-time",
+          "pattern": "(Z|[+-]\\d{2}:\\d{2})$",
+          "type": "string"
+        },
+        "start": {
+          "description": "Inclusive range start, timezone-aware UTC (None = unbounded). Omitted when None.",
+          "format": "date-time",
+          "pattern": "(Z|[+-]\\d{2}:\\d{2})$",
+          "type": "string"
+        }
+      },
+      "title": "TimeRange",
+      "type": "object"
+    }
+  },
+  "$id": "https://orditect.dev/schemas/query/0.1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueryModels",
+  "x-stability": "ratifying"
+}
