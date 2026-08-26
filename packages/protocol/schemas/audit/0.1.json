@@ -1,0 +1,53 @@
+{
+  "$id": "https://orditect.dev/schemas/audit/0.1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One audit log entry (append-only).\n\nAttributes:\n    event_id: Idempotency key (unique identifier of this event).\n    task_id: Associated task identifier.\n    scope: Free-form scope tag (e.g. budget scope; business-defined).\n    event_type: Opaque event type string (protocol embeds no vocabulary).\n    source: Originating framework (\"core\" / \"flow\" / \"stream\" / custom).\n    payload: Free-form event payload (business-defined).\n    created_at: Event occurrence time (mechanism time-field vocabulary,\n        unified across domains: created_at / updated_at / expire_at).",
+  "properties": {
+    "created_at": {
+      "description": "Event occurrence time, timezone-aware UTC (T7).",
+      "format": "date-time",
+      "pattern": "(Z|[+-]\\d{2}:\\d{2})$",
+      "title": "Created At",
+      "type": "string"
+    },
+    "event_id": {
+      "description": "Idempotency key of this event (T4).",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "default": "",
+      "description": "Opaque event type string (T6).",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "description": "Free-form event payload (business-defined).",
+      "title": "Payload",
+      "type": "object"
+    },
+    "scope": {
+      "description": "Free-form scope tag (business-defined). Omitted when None.",
+      "type": "string"
+    },
+    "source": {
+      "default": "",
+      "description": "Originating framework or producer (opaque).",
+      "title": "Source",
+      "type": "string"
+    },
+    "task_id": {
+      "description": "Associated task identifier.",
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "event_id",
+    "task_id"
+  ],
+  "title": "AuditEvent",
+  "type": "object",
+  "x-stability": "ratifying"
+}

@@ -1,0 +1,29 @@
+{
+  "$id": "https://orditect.dev/schemas/pointer/0.1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Pointer to content stored in an external backend.\n\nAttributes:\n    backend: Opaque storage backend identifier (no business semantics).\n    key: Backend-specific addressing key (path, row id, vector id, ...).\n    metadata: Optional free-form metadata (content_type, size, ...).",
+  "properties": {
+    "backend": {
+      "description": "Opaque storage backend identifier (T6).",
+      "title": "Backend",
+      "type": "string"
+    },
+    "key": {
+      "description": "Backend-specific addressing key (path, row id, vector id, ...).",
+      "title": "Key",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "description": "Optional free-form metadata (content_type, size, ...). Omitted when None.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "backend",
+    "key"
+  ],
+  "title": "TaskPointer",
+  "type": "object",
+  "x-stability": "ratifying"
+}
