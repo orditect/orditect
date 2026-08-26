@@ -93,6 +93,7 @@ class SnapshotReader(Protocol):
     cycle-safe and depth-bounded (contract terms, not implementation
     details): a lineage cycle must terminate traversal explicitly rather
     than loop, and depth beyond the caller's max_depth is truncated.
+    `time_range` filters apply to `created_at` in every snapshot query.
     """
 
     @property
@@ -214,8 +215,11 @@ class SnapshotReader(Protocol):
         the running set for interruption. Payload/input/output content
         filtering is out of contract scope (iron rule). Expired snapshots
         are invisible (T1). Returns latest generations only.
+        `time_range` applies to `created_at`. `sort.field` must be within the
+        contract mechanism whitelist (see mechanism.SORT_FIELDS).
 
         Raises:
+            InvalidQueryError: sort.field outside the mechanism whitelist.
             UnsupportedCapabilityError: snapshot_query not declared (T8).
             ContractError: any other failure (T9).
         """
@@ -231,12 +235,20 @@ class SnapshotReader(Protocol):
         """Aggregate snapshots by a mechanism field (dashboard rollups).
 
         Semantics: groups latest-generation snapshots by `group_by`
-        (a mechanism field, e.g. "status" or "model") and returns a mapping
-        of group value -> {"count": int, "cost": dict[str, float]} where
-        cost is summed per key across the group's snapshots. Business-metric
-        aggregation beyond count/cost summation is out of contract scope.
+        (a mechanism field from the contract whitelist, e.g. "status" or
+        "model") and returns a mapping of group value ->
+        {"count": int, "cost": dict[str, float]} where cost is summed per key
+        across the group's snapshots. Business-metric aggregation beyond
+        count/cost summation is out of contract scope.
+
+        Precision note (Appendix C): cost summation is IEEE 754 double-
+        precision accumulation with a committed relative error bound of 1e-9.
+        Aggregated values are for display and monitoring only — never use
+        them for reconciliation or billing decisions; reconcile via the
+        audit domain instead.
 
         Raises:
+            InvalidQueryError: group_by outside the mechanism whitelist.
             UnsupportedCapabilityError: snapshot_query not declared (T8).
             ContractError: any other failure (T9).
         """

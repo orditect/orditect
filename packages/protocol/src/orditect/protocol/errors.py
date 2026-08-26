@@ -49,6 +49,14 @@ class IdempotencyConflictError(ContractError):
     reusing with a different payload is a conflict and must be explicit.
     """
 
+class InvalidQueryError(ContractError):
+    """Raised when a query parameter is outside the contract mechanism
+    whitelist (e.g. an unknown sort field or group_by value).
+
+    Mechanism-layer error: carries no business semantics. Explicit rejection
+    replaces silent fallback so that adapters of every backend family share
+    one behavior (T8 spirit applied to parameters).
+    """
 
 __all__ = [
     "ContractError",
@@ -57,4 +65,5 @@ __all__ = [
     "SnapshotNotFoundError",
     "TerminalStateViolationError",
     "IdempotencyConflictError",
+    "InvalidQueryError",
 ]

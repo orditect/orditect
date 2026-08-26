@@ -6,6 +6,7 @@ from orditect.protocol.errors import (
     ContractError,
     ContentNotFoundError,
     IdempotencyConflictError,
+    InvalidQueryError,
     SnapshotNotFoundError,
     TerminalStateViolationError,
     UnsupportedCapabilityError,
@@ -22,6 +23,7 @@ class TestErrorHierarchy:
         assert issubclass(SnapshotNotFoundError, ContractError)
         assert issubclass(TerminalStateViolationError, ContractError)
         assert issubclass(IdempotencyConflictError, ContractError)
+        assert issubclass(InvalidQueryError, ContractError)
 
     def test_contract_error_is_exception(self):
         assert issubclass(ContractError, Exception)

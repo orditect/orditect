@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - TBD
+
+### Added
+- Versioned JSON Schema artifacts (`schemas/`, 6 domains) + drift gate.
+- `InvalidQueryError` + mechanism-field whitelists (`mechanism.py`).
+- Dependency-graph as fifth domain: DependencyEdge/DependencyGraph models,
+  DependencyWriter/DependencyReader protocols, CF-DEP cases, T12 term.
+- Conformance profiles (full / producer / consumer) + seeded CF-VIEW cases.
+- Data-rule toolkit (`orditect.protocol.rules`): 9 DR rules + run_rules
+  reference executor + docs/data-rules.md.
+- `CapabilitySet`: dependency_sink/dependency_query half-domains +
+  concurrency_domain (T10 Revision).
+- Term evolution policy; T7/T10 Revision 0.1.2 (multi-producer clock,
+  concurrency-domain scoping).
+- docs: wire-format.md, backend-matrix.md, conformance.md, data-rules.md.
+
+### Changed
+- **AuditEvent.timestamp renamed to created_at** (unified mechanism
+  time-field vocabulary). Serialized key set changed accordingly.
+- Conformance runner executes all cases in ONE event loop (adapters with
+  loop-bound resources now work).
+- Terms document carries Revision notes; traceability is three-way
+  (terms <-> CF cases <-> DR rules).
+
+### Compatibility notes
+- CapabilitySet: old JSON (8-10 fields) deserializes with new fields
+  defaulting (False / "process").
+- Sort.field / group_by outside the mechanism whitelist now raises
+  InvalidQueryError (previously implementation-defined fallback).
+
 ## [0.1.0] - 2026-08-28
 
 First bootstrap of the Orditect storage contract layer. Contracts are

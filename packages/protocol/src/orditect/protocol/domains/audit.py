@@ -73,10 +73,13 @@ class AuditReader(Protocol):
         Semantics: returns events matching all provided filters (AND
         combination). All filter fields are mechanism fields; business-predicate
         filtering on payload content is out of contract scope (iron rule).
-        Missing filters match everything. Default ordering is by timestamp
-        descending (see Sort model default).
+        Missing filters match everything. Default ordering is by created_at
+        descending (see Sort model default). `time_range` applies to
+        `created_at`. `sort.field` must be within the contract mechanism
+        whitelist (see mechanism.SORT_FIELDS).
 
         Raises:
+            InvalidQueryError: sort.field outside the mechanism whitelist.
             UnsupportedCapabilityError: audit_query not declared (T8).
             ContractError: any other failure (T9).
         """

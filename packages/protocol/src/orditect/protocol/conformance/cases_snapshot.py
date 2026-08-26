@@ -1,4 +1,11 @@
-"""Snapshot-domain conformance cases (CF-SNP-*)."""
+"""Snapshot-domain conformance cases (CF-SNP-*).
+
+Authoring discipline: one adapter instance runs the WHOLE suite in a single
+event loop — every case MUST use case-unique task_id / event_id / key
+prefixes (e.g. "cf-snp-009"), and read-side cases that scan the whole store
+(aggregate/query without a filter) MUST isolate via parent_task_id or an
+equivalent case-unique filter. Never shared placeholders like "t".
+"""
 
 from __future__ import annotations
 
@@ -82,3 +89,68 @@ async def expired_snapshots_invisible(adapter: Any) -> None:
     await adapter.save(s)
     got = await adapter.get("t-snp-004", "step")
     assert got is None, "expired snapshot must be invisible (T1)"
+
+@case("CF-SNP-007")
+async def query_filters_and_combined(adapter: Any) -> None:
+    """CF-SNP-007 (T6): query filters combine with AND semantics."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    await adapter.save(_snap("cf-007-a", "s", "e1", status="running"))
+    await adapter.save(_snap("cf-007-b", "s", "e1", status="done"))
+    saved = await adapter.get("cf-007-b", "s")
+    assert saved is not None
+    await adapter.save(saved.model_copy(update={"parent_task_id": "cf-007-a"}))
+
+    rows = await adapter.query(status="done", parent_task_id="cf-007-a")
+    assert {s.task_id for s in rows} == {"cf-007-b"}
+
+
+@case("CF-SNP-008")
+async def list_versions_ordering(adapter: Any) -> None:
+    """CF-SNP-008 (T6): list_versions honors asc/desc ordering on created_at."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    from orditect.protocol.models import Sort, SortDirection
+
+    await adapter.save(_snap("cf-008", "s", "e1"))
+    await adapter.save(_snap("cf-008", "s", "e2"))
+    asc = await adapter.list_versions(
+        "cf-008", "s", sort=Sort(field="created_at", direction=SortDirection.ASC))
+    desc = await adapter.list_versions(
+        "cf-008", "s", sort=Sort(field="created_at", direction=SortDirection.DESC))
+    assert [v.execution_id for v in asc] == ["e1", "e2"]
+    assert [v.execution_id for v in desc] == ["e2", "e1"]
+
+@case("CF-SNP-009")
+async def aggregate_empty_and_single(adapter: Any) -> None:
+    """CF-SNP-009 (T6): aggregate over an empty set -> {}; over one group -> one bucket."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    empty = await adapter.aggregate(group_by="status",
+                                    parent_task_id="cf-009-nothing")
+    assert empty == {}
+    snap = _snap("cf-009", "s", "e1", status="running")
+    snap = snap.model_copy(update={"parent_task_id": "cf-009-root"})
+    await adapter.save(snap)
+    out = await adapter.aggregate(group_by="status",
+                                  parent_task_id="cf-009-root")
+    assert set(out.keys()) == {"running"}
+    assert out["running"]["count"] == 1
+
+@case("CF-SNP-010")
+async def aggregate_precision_bound(adapter: Any) -> None:
+    """CF-SNP-010 (Appendix C): float cost summation stays within 1e-9 relative error."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    a = TaskSnapshot(task_id="cf-010-a", step="s", execution_id="e1",
+                     status="x", cost={"usd": 0.1},
+                     parent_task_id="cf-010-root")
+    b = TaskSnapshot(task_id="cf-010-b", step="s", execution_id="e1",
+                     status="x", cost={"usd": 0.2},
+                     parent_task_id="cf-010-root")
+    await adapter.save(a)
+    await adapter.save(b)
+    out = await adapter.aggregate(group_by="status",
+                                  parent_task_id="cf-010-root")
+    total = out["x"]["cost"]["usd"]
+    assert abs(total - 0.3) <= 0.3 * 1e-9

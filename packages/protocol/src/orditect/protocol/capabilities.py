@@ -8,8 +8,8 @@ UnsupportedCapabilityError (never silently degrade).
 
 from __future__ import annotations
 
+from typing import Literal
 from pydantic import BaseModel, Field
-
 
 class CapabilitySet(BaseModel):
     """Declares which storage domain half-interfaces an implementation provides.
@@ -34,9 +34,20 @@ class CapabilitySet(BaseModel):
     snapshot_sink: bool = False
     snapshot_query: bool = False
 
+    # Dependency-graph domain (DependencyWriter / DependencyReader)
+    dependency_sink: bool = False
+    dependency_query: bool = False
     # Protocol version compatibility range this implementation supports.
     # Format: PEP 440 version specifier, e.g. ">=0.1,<0.2".
     protocol_compat: str = Field(default=">=0.1,<0.2")
+    # Concurrency domain within which the adapter's atomicity guarantees
+    # (T10) hold: "process" (in-process), "database" (one database's
+    # connection domain), or "distributed" (cross-node). Adapters declare
+    # their scope; conformance concurrency cases verify within it.
+    concurrency_domain: Literal["process", "database", "distributed"] = (
+        "process"
+    )
+
 
     model_config = {"frozen": True}
 
@@ -46,7 +57,8 @@ class CapabilitySet(BaseModel):
         Args:
             half_domain: one of "content_sink", "content_query", "audit_sink",
                 "audit_query", "result_sink", "result_query",
-                "snapshot_sink", "snapshot_query".
+                "snapshot_sink", "snapshot_query",
+                "dependency_sink", "dependency_query".
 
         Raises:
             ValueError: unknown half-domain name (programming error, explicit).
@@ -61,6 +73,7 @@ _HALF_DOMAINS = frozenset({
     "audit_sink", "audit_query",
     "result_sink", "result_query",
     "snapshot_sink", "snapshot_query",
+    "dependency_sink", "dependency_query",
 })
 
 

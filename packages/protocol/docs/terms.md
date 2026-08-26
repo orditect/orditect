@@ -29,6 +29,22 @@ Each term has four parts:
 
 Conformance case numbering is defined in Appendix A.
 
+
+## Term evolution policy
+
+1. **Append-first.** New semantic needs prefer a NEW term number; the
+   semantics of a published term are not modified except via rules 2–3.
+2. **Revise.** Clarifications and tightenings are allowed; loosening is
+   forbidden (a loosening is a deprecation, rule 3). Every revision keeps
+   an in-term Revision note block: old wording, new wording, rationale,
+   impact.
+3. **Deprecate.** A retired term is marked `superseded-by: Tn`; its number
+   stays as a tombstone and is never reused. Conformance-case and data-rule
+   numbers follow the same policy.
+4. **Change mapping.** Every change is recorded in the CHANGELOG as a
+   (term -> semantic change -> impact) triple.
+
+This policy itself is subject to rule 2.
 ---
 
 ## T1 — Lease model (absolute expiry, reader-side filtering)
@@ -163,17 +179,38 @@ existence is pinned; vocabulary non-embedding is enforced at review).
 ## T7 — Clock discipline
 
 **Statement.** All datetimes in the protocol are timezone-aware UTC. Mixing
-naive and aware datetimes in comparisons is a contract violation. Values
-compared across processes are either produced by the storage service's own
-clock or passed as absolute instants — never as client-computed durations.
+naive and aware datetimes in comparisons is a contract violation.
+
+> **Revision 0.1.2** (multi-producer clock reality): the original Statement
+> closed with "Values compared across processes are either produced by the
+> storage service's own clock or passed as absolute instants — never as
+> client-computed durations." That wording implied a single unifiable
+> storage clock, which holds for one implementation but not for a
+> multi-producer world (bridges on different machines each write with their
+> own clock). Revised to: timestamps are **producer-clock** values.
+> Comparisons within one producer's sequence are exact; **cross-producer
+> comparisons are approximate**, bounded by the producers' clock drift.
+> `expire_at` is authoritative **as written by its producer**; a reader
+> comparing against its own clock must expect the two clocks' combined
+> drift. Rationale: the term's credibility comes from honesty — a promise
+> that cannot be enforced across independent producers (a unified clock)
+> is weaker than a promise that can (aware-ness + declared drift
+> semantics). Impact: no implementation change (existing behavior already
+> matches); bridge producers' duty is documented in
+> docs/bridge-discipline.md; DR-ALL-001 unaffected (it checks aware-ness,
+> not clock sameness).
 
 **Origin.** taskbase B8 (server-side clock for expiry judgement) and #15
 (bucket wait computed from the server clock); the Python 3.12
 `datetime.utcnow` deprecation fix in this package (all defaults use
 `datetime.now(UTC)`).
 
-**Enforcement.** Model default factories (`_utc_now`); `expire_at` /
-`timestamp` / `created_at` / `updated_at` fields; `TimeRange`.
+**Enforcement.** Model default factories (`_utc_now`); the unified mechanism
+time-field vocabulary `created_at` / `updated_at` / `expire_at`; `TimeRange`.
+(AuditEvent's occurrence field was renamed from `timestamp` to `created_at`
+in v0.1.2 to close the cross-domain vocabulary split.)
+Bridge producers write with their own timezone-aware UTC clock
+(see docs/bridge-discipline.md §4).
 
 **Verification.** Unit and golden tests pin aware-UTC defaults (existing
 `tests/unit/test_models.py`, `tests/golden/test_model_schema.py`); adapter
@@ -226,12 +263,27 @@ surface check in the conformance kit's self-pinning tests
 interface must satisfy exactly-one-winner or cleanly-mergeable semantics.
 A partially-written state must never be observable.
 
+> **Revision 0.1.2** (concurrency-domain scoping): the original Statement
+> did not delimit the concurrency scope, implicitly assuming a single
+> process. Revised to: the atomicity guarantee holds **within the
+> adapter's declared concurrency domain** — `process` (in-process, e.g.
+> memory / local file), `database` (one database's connection domain, e.g.
+> PostgreSQL), or `distributed` (cross-node, requiring the backend's own
+> distributed-consistency mechanism). Adapters declare their domain via
+> `CapabilitySet.concurrency_domain`; CF concurrency cases verify within
+> the declared domain. Rationale: precision, not loosening — the guarantee
+> was never honestly definable without a scope; a file adapter cannot
+> promise cross-process atomicity, and should not pretend to. Impact: no
+> behavior change; memory/file declare `process` (the default), future
+> relational adapters declare `database`.
+
 **Origin.** taskbase `task_init.lua` (#14: concurrent `if_not_exists`
 initialization — exactly one of two writers succeeds); `json_merge.lua`
 (atomic read-modify-write).
 
 **Enforcement.** `SnapshotWriter.save`; `AuditWriter.append`;
 `ResultWriter.save`; `ContentWriter.put`.
+`CapabilitySet.concurrency_domain` (adapter's declared scope).
 
 **Verification.** CF-SNP-006 (concurrent same-key save); CF-RST-003
 (concurrent save of the same stream_id).
@@ -260,6 +312,27 @@ cross-framework alignment is a review item at core/flow implementation time.
 
 ---
 
+## T12 — Dependency graph as pure-edge facts
+
+**Statement.** The dependency domain stores edges only:
+`(child_id, parent_id, is_primary, registered_at)`. Nodes are task_id
+references — no node properties are stored in this domain. An edge binds
+the task, not an execution generation: reopen (a new execution_id) never
+rewrites edges. Cycle detection is not the store's job: the writer records
+facts as given; cycle prevention lives with the registrar, cycle discovery
+with offline tools. Batch atomicity across edges is not guaranteed;
+partial edge writes on failure are compensated by offline rebuild tools.
+
+**Origin.** flow v0.1.1 dep_graph_store injection point and
+DependencyGovernor registration semantics; graph-family backend analysis.
+
+**Enforcement.** `DependencyEdge` / `DependencyGraph` models;
+`DependencyWriter` / `DependencyReader` protocols.
+
+**Verification.** CF-DEP-001, CF-DEP-004, CF-DEP-005, CF-DEP-006.
+
+---
+
 ## Appendix A — Conformance case numbering
 
 Format: `CF-<DOMAIN>-<NNN>`
@@ -273,25 +346,68 @@ Domain codes:
 | RST  | Result |
 | SNP  | Snapshot |
 | ALL  | Cross-cutting (capability, error surface) |
+| DEP  | Dependency graph |
+
 
 Rules:
 
 - Every conformance test's docstring starts with its case id and the term(s)
   it verifies, e.g. `CF-SNP-003 (T3): mutation after terminal is rejected`.
 - Case numbers are append-only: never renumber a published case.
+- Consumer-profile seeded cases use the `CF-VIEW-NNN` range; they verify
+  read-side semantics over pre-seeded data and are cross-referenced from
+  the affected terms where applicable (e.g. CF-VIEW-002 under T1).
+- Data rules use `DR-<DOMAIN>-<NNN>` numbering under the same append-only /
+  tombstone policy; every DR id must be referenced from its term row in
+  Appendix B (three-way closure with CF cases).
+
+## Appendix A2 — Conformance profiles
+
+Certification is tiered because implementations come in three shapes:
+
+| Profile | Implementation shape | Hard requirement |
+|---|---|---|
+| full | storage backend | paired sink/query declarations |
+| producer | external-framework bridge | sink half-domains as declared |
+| consumer | read-only tool (visualization / diagnostics) | query half-domains as declared |
+
+A profile is a minimum bar, never a ceiling: every declared half-domain is
+verified (T8). See docs/conformance.md for the authoritative text. Term
+traceability is unaffected: each case keeps its write-half-domain term
+mapping; consumer-seeded cases (CF-VIEW-*) verify the read side of the
+terms they reference (Appendix B).
+
 
 ## Appendix B — Traceability matrix
 
 | Term | Enforcement surface | Verification |
 |---|---|---|
-| T1  | snapshot/result models + readers | CF-RST-002, CF-SNP-004 |
+| T1  | snapshot/result models + readers | CF-RST-002, CF-SNP-004, CF-AUD-004, CF-VIEW-002; DR-ALL-002 |
 | T2  | composing layer (flow sink)     | review item |
-| T3  | SnapshotWriter + errors         | CF-SNP-003, CF-SNP-005 |
-| T4  | all writers + errors            | CF-AUD-001/002, CF-SNP-002/006 |
-| T5  | content writer + snapshot model | CF-CTT-001/003 (+review) |
-| T6  | all opaque-string fields        | review (+golden) |
-| T7  | all datetime fields             | unit/golden tests (+review) |
+| T3  | SnapshotWriter + errors         | CF-SNP-003, CF-SNP-005; DR-SNP-001, DR-SNP-002 |
+| T4  | all writers + errors            | CF-AUD-001, CF-AUD-002, CF-SNP-002, CF-SNP-006, CF-DEP-002, CF-DEP-003; DR-AUD-001 |
+| T5  | content writer + snapshot model | CF-CTT-001, CF-CTT-003, CF-CTT-004, CF-CTT-005 (+review); DR-CTT-001 |
+| T6  | all opaque-string fields        | review (+golden) + CF-AUD-003, CF-AUD-005, CF-SNP-007, CF-SNP-008, CF-SNP-009, CF-SNP-011, CF-SNP-012, CF-VIEW-004; DR-ALL-003 |
+| T7  | all datetime fields             | unit/golden tests (+review); DR-ALL-001 |
 | T8  | CapabilitySet + all protocols   | kit self-pinning tests (skip/red) |
 | T9  | errors taxonomy + sinks         | review (+kit self-pinning) |
 | T10 | all writers                     | CF-SNP-006, CF-RST-003 |
-| T11 | TaskSnapshot.execution_id       | unit test (+review at core/flow) |
+| T11 | TaskSnapshot.execution_id       | unit test, CF-VIEW-001 (+review at core/flow); DR-SNP-003 |
+| T12 | dependency models + protocols   | CF-DEP-001, CF-DEP-004, CF-DEP-005, CF-DEP-006, CF-VIEW-003; DR-DEP-001 |
+
+## Appendix C — Mechanism semantics notes
+
+**Aggregate precision (adjudicated v0.1.2).** Cost summation in
+`SnapshotReader.aggregate` is IEEE 754 double-precision accumulation with a
+committed relative error bound of 1e-9. Aggregated values are for display
+and monitoring only — never for reconciliation or billing decisions;
+reconcile via the audit domain. (Rationale: switching cost to integer minor
+units would churn every model, implementation, and test for no display-level
+benefit; if billing-grade needs emerge, evolve via a new field under the
+term-evolution policy, not by redefining float semantics.)
+(verified by CF-SNP-010).
+
+**Pagination defaults.** `Page(limit=100, offset=0)`; an offset beyond the
+result set yields an empty list (never an error).
+
+**Time-range intervals.** `start` is inclusive, `end` is exclusive.

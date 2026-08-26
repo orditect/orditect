@@ -8,6 +8,7 @@ rest (term T8).
 
 from orditect.protocol.domains.audit import AuditReader, AuditWriter
 from orditect.protocol.domains.content import ContentReader, ContentWriter
+from orditect.protocol.domains.dependency import DependencyReader, DependencyWriter
 from orditect.protocol.domains.result import ResultReader, ResultWriter
 from orditect.protocol.domains.snapshot import SnapshotReader, SnapshotWriter
 
@@ -16,6 +17,8 @@ __all__ = [
     "AuditReader",
     "ContentWriter",
     "ContentReader",
+    "DependencyWriter",
+    "DependencyReader",
     "ResultWriter",
     "ResultReader",
     "SnapshotWriter",

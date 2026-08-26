@@ -8,6 +8,7 @@ from orditect.protocol.models.pointer import TaskPointer
 from orditect.protocol.models.snapshot import TaskSnapshot
 from orditect.protocol.models.audit import AuditEvent
 from orditect.protocol.models.query import Page, Sort, SortDirection, TimeRange
+from orditect.protocol.models.edge import DependencyEdge, DependencyGraph
 
 __all__ = [
     "TaskPointer",
@@ -17,4 +18,6 @@ __all__ = [
     "Sort",
     "SortDirection",
     "TimeRange",
+    "DependencyEdge",
+    "DependencyGraph",
 ]

@@ -65,13 +65,14 @@ class TestTaskSnapshotSchema:
 
 class TestAuditEventSchema:
     def test_full_key_set(self):
+        # FLIP(v0.1.2): AuditEvent.timestamp renamed to created_at — WI-1.4
         e = AuditEvent(
             event_id="ev", task_id="t", scope="sc", event_type="et",
-            source="flow", payload={"a": 1}, timestamp=_TS,
+            source="flow", payload={"a": 1}, created_at=_TS,
         )
         assert set(e.to_payload().keys()) == {
             "event_id", "task_id", "scope", "event_type", "source",
-            "payload", "timestamp",
+            "payload", "created_at",
         }
 
 

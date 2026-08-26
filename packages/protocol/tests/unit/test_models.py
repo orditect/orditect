@@ -12,6 +12,8 @@ from orditect.protocol.models import (
     TaskPointer,
     TaskSnapshot,
     TimeRange,
+    DependencyEdge,
+    DependencyGraph,
 )
 
 
@@ -71,10 +73,12 @@ class TestAuditEvent:
             AuditEvent(task_id="t1")  # type: ignore[call-arg]
 
     def test_defaults(self):
+        # FLIP(v0.1.2): AuditEvent.timestamp renamed to created_at — WI-1.4
+        # unified mechanism time-field vocabulary (created_at/updated_at/expire_at)
         e = AuditEvent(event_id="ev1", task_id="t1")
         assert e.payload == {}
         assert e.event_type == ""
-
+        assert e.created_at.tzinfo is not None  # T7: aware UTC default
 
 @pytest.mark.unit
 class TestQueryModels:
@@ -98,3 +102,49 @@ class TestQueryModels:
         tr = TimeRange()
         assert tr.start is None
         assert tr.end is None
+
+@pytest.mark.unit
+class TestDependencyEdge:
+    def test_minimal(self):
+        e = DependencyEdge(child_id="c", parent_id="p")
+        assert e.is_primary is False
+        assert e.registered_at.tzinfo is not None  # T7: aware UTC default
+
+    def test_primary_flag(self):
+        e = DependencyEdge(child_id="c", parent_id="p", is_primary=True)
+        assert e.is_primary is True
+
+    def test_frozen(self):
+        e = DependencyEdge(child_id="c", parent_id="p")
+        with pytest.raises(ValidationError):
+            e.child_id = "other"  # type: ignore[misc]
+
+    def test_payload_key_set(self):
+        e = DependencyEdge(child_id="c", parent_id="p")
+        assert set(e.to_payload().keys()) == {
+            "child_id", "parent_id", "is_primary", "registered_at",
+        }
+
+    def test_self_loop_is_data_not_rejected(self):
+        """T12: the store records facts; a self-loop is data, not an error."""
+        e = DependencyEdge(child_id="a", parent_id="a")
+        assert e.child_id == e.parent_id == "a"
+
+
+@pytest.mark.unit
+class TestDependencyGraph:
+    def test_defaults(self):
+        g = DependencyGraph(root_task_id="root")
+        assert g.task_ids == []
+        assert g.edges == []
+
+    def test_payload_key_set(self):
+        g = DependencyGraph(
+            root_task_id="root",
+            task_ids=["root", "a"],
+            edges=[DependencyEdge(child_id="a", parent_id="root")],
+        )
+        payload = g.to_payload()
+        assert set(payload.keys()) == {"root_task_id", "task_ids", "edges"}
+        assert payload["task_ids"] == ["root", "a"]
+        assert len(payload["edges"]) == 1
