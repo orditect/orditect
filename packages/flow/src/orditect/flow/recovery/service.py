@@ -55,6 +55,7 @@ class RecoveryService:
         executor: Any,
         reuse_terminal_words: frozenset[str],
         task_factory: TaskFactory,
+        dependency_governor: Any = None,  # v0.1.1: snapshot invalidation wiring
     ):
         if not reuse_terminal_words:
             raise ValueError("RecoveryService requires explicit reuse_terminal_words (T6)")
@@ -65,6 +66,10 @@ class RecoveryService:
         self._executor = executor
         self._reuse_words = frozenset(reuse_terminal_words)
         self._task_factory = task_factory
+        # v0.1.1: when injected, the rerun path invalidates the exemption
+        # snapshot after reopen (stale snapshots must never survive a new
+        # generation). Best-effort: invalidation failure never blocks rerun.
+        self._dependency_governor = dependency_governor
         self._bg_tasks: set[asyncio.Task] = set()  # strong refs against GC
 
     # ---------- per-node decision ----------
@@ -149,16 +154,28 @@ class RecoveryService:
     async def _rerun_node(self, task_id: str) -> None:
         """Reopen a new generation (core) + re-execute via executor.
 
-                Order matters: reopen first (resets state to initial for the new
-                generation), then execute. executor.execute drives running settlement ->
-                F3 reuse query -> execution; for a reopened node the F3 query sees
-                the NEW generation (no success snapshot yet), so it executes.
-                """
+        Order matters: reopen first (resets state to initial for the new
+        generation), then invalidate the exemption snapshot (stale snapshots
+        must not survive a new generation), then execute. executor.execute
+        drives running settlement -> F3 reuse query -> execution; for a
+        reopened node the F3 query sees the NEW generation (no success
+        snapshot yet), so it executes.
+        """
         # 1. Hot-path new generation (T3-safe: reopen, not state regression)
         await self._storage.reopen_task(task_id)
-        # 2. Reconstruct task instance (caller-injected factory)
+        # 2. v0.1.1: invalidate the exemption snapshot frozen at registration
+        #    (best-effort: the rerun itself must not be blocked by this)
+        if self._dependency_governor is not None:
+            try:
+                await self._dependency_governor.invalidate_exempt_snapshot(task_id)
+            except Exception as e:
+                logger.warning(
+                    f"exempt snapshot invalidation failed (rerun unaffected): "
+                    f"{task_id}, {e}"
+                )
+        # 3. Reconstruct task instance (caller-injected factory)
         task = await self._task_factory(task_id)
-        # 3. Drive re-execution directly via executor (bypass submit: reopen
+        # 4. Drive re-execution directly via executor (bypass submit: reopen
         #    already reset state; re-initialize would be wrong). Strong-ref
         #    the background task against GC.
         bg = asyncio.create_task(self._executor.execute(task_id=task_id, task=task))

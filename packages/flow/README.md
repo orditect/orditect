@@ -103,6 +103,39 @@ orditect-core     (governance engine: task store, semaphore, reopen primitive)
 orditect-protocol (storage contracts: snapshot / content / audit domains)
 ```
 
+### Multi-Parent Dependency Governance (v0.1.1)
+
+`DependencyGovernor` is a passive, protocol-layer API for tasks with
+multiple parents. It governs the dependency relationship only — task
+creation, scheduling, and DAG semantics stay with the external
+orchestration system:
+
+```python
+from orditect.flow.governance import DependencyGovernor
+
+gov = DependencyGovernor(
+    storage,
+    success_words=frozenset({"succeeded"}),   # caller-declared (T6)
+    lifecycle=orchestrator.lifecycle,          # vote-triggered cancel
+    dep_graph_store=my_graph_store,            # optional cold path
+)
+
+# after creating the child task (external system's job):
+await gov.register_dependency(child_id, [p1, p2, p3])
+
+# after ANY task reaches a terminal state (external system's job):
+await gov.notify_task_terminal(parent_id, "succeeded")
+
+# poll readiness (never schedules anything):
+ready = await gov.get_ready_tasks()
+```
+- Success never auto-votes; abnormal terminals auto-vote (hang prevention).
+- Votes are atomic: exactly one concurrent voter triggers cancellation.
+- Without `dep_graph_store`, the hot path works fully and
+  `get_dependency_graph()` raises `UnsupportedCapabilityError` (T8).
+
+
+
 ## Documentation
 
 - [Recovery plane](docs/recovery.md): resume / rerun design and wiring

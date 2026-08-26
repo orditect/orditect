@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - TBD
+
+Multi-parent dependency governance (passive protocol-layer API).
+
+### Added
+- `DependencyGovernor` (orditect.flow.governance): register_dependency /
+  get_ready_tasks / vote_cancel / notify_task_terminal /
+  get_dependency_graph / result_consumed / invalidate_exempt_snapshot.
+  Governance only: never creates tasks, never schedules execution;
+  readiness is driven exclusively by external notify_task_terminal() calls.
+  Vocabulary neutrality (T6): success / terminal / ready words are
+  caller-declared at construction.
+- Parent classification at registration: non-terminal parents are counted
+  and added to active_children; terminal-success parents are ignored;
+  terminal-abnormal parents count as already-cast cancel votes. Success
+  never auto-votes (prevents accidental cancellation); abnormal terminals
+  auto-vote (hang prevention). Threshold voting is atomic — exactly one
+  concurrent voter triggers cancellation.
+- Exemption snapshot: frozen at registration (explicit list capped at 10,
+  or inherited along the primary-parent chain); the executor prefers the
+  snapshot over the live ancestor walk when present, with graceful
+  fallback. invalidate_exempt_snapshot resets it on reopen;
+  RecoveryService's rerun path invokes it when a governor is injected.
+- Offline tools: scan_dependency_cycles (full-graph DFS, line 2 of cycle
+  detection) and rebuild_dep_counters (admin recovery from the cold store).
+- Injection points: TaskOrchestrator(dependency_governor=...),
+  RecoveryService(dependency_governor=...). Not injected: every new code
+  path is inert.
+
+### Changed
+- Requires orditect-core >= 0.1.1 (dependency-governance primitives).
+- executor: exemption determination gains a snapshot-first pre-branch;
+  _find_ancestor_resources unchanged.
+
 ## [0.1.0] - TBD
 
 First release as orditect-flow (renamed from fastapi-taskflow). Introduces

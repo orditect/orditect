@@ -17,7 +17,7 @@ The core governance machinery is **implemented and stable**:
 | `orditect-stream` | ✅ Implemented – SSE protocol, multi‑stream mux, placeholders, disconnect strategies |
 | `orditect-adapter-memory` | ✅ Implemented – Reference implementation passing the conformance suite |
 | Conformance suite coverage | ⚠️ Baseline – 2–5 cases per domain; will expand with the first production backend |
-
+| `orditect-flow` dependency governance | ✅ Implemented (v0.1.1) – passive multi-parent dependency APIs (register / ready / vote / notify), exemption snapshot, offline cycle scan & counter rebuild |
 > **Known skeletons / placeholders**: `DelayedScheduler`, `DeadLetterQueue.retry()`, SSE journal replay, and the vocabulary‑neutral suspend mechanism are explicitly reserved for future iterations (see below).
 
 ---
@@ -34,6 +34,13 @@ The core governance machinery is **implemented and stable**:
 - **Local File Adapter (open‑source)** – Zero‑dependency persistence for development and small‑scale deployments.
   - Allows running the full recovery plane without any external infrastructure.
 - **Protocol v1.0** – Declared stable; terms become immutable. Future changes require a major version bump.
+
+### 1b. Adapter / Bridge Ecosystem for Dependency Governance
+
+- `orditect-adapter-local` / `orditect-adapter-pg` cold `dep_graph_store`
+  implementations (full dependency-graph persistence).
+- `orditect-bridge-*` packages wiring external orchestration frameworks
+  (LangChain / LangGraph / ...) to `DependencyGovernor`'s passive APIs.
 
 ### 2. Operational Surfaces (HITL & MCP)
 

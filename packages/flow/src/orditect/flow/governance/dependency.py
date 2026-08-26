@@ -324,3 +324,163 @@ class DependencyGovernor:
                     break
             current = rec.get("parent_task_id")
         return resources
+
+    # ---------- readiness query ----------
+
+    async def get_ready_tasks(self) -> list[str]:
+        """Return task_ids whose remaining_deps <= 0 AND status == ready_status.
+
+        Readiness is a computed view only — nothing is ever scheduled here.
+        Performance boundary: SCAN-based; intended for <=10k-scale task sets.
+        Callers should poll no faster than ~100ms.
+        """
+        return await self._storage.list_ready_dep_tasks(status=self._ready_status)
+
+    # ---------- cancel voting ----------
+
+    async def vote_cancel(self, parent_id: str, child_id: str) -> bool:
+        """Cast a cancel vote against child_id on behalf of parent_id.
+
+        Returns True when this vote reached the threshold (len(depends_on))
+        and cancellation was triggered. Atomicity: SADD + SCARD run in one
+        MULTI/EXEC transaction (core vote_and_check_threshold), so exactly
+        one concurrent voter observes the threshold being reached.
+
+        Returns False when the child is missing, already terminal, the
+        parent is not registered as a dependency, or the threshold is not
+        reached.
+        """
+        rec = await self._storage.get_task(child_id)
+        if not rec:
+            return False
+        status = rec.get("status", "")
+        if self._is_terminal(status):
+            return False
+        depends_on = rec.get("depends_on") or []
+        if parent_id not in depends_on:
+            return False
+
+        reached = await self._storage.vote_and_check_threshold(
+            child_id, parent_id, len(depends_on)
+        )
+        if reached and self._lifecycle is not None:
+            try:
+                await self._lifecycle.cancel(child_id)
+            except Exception as e:
+                logger.warning(f"vote-triggered cancel failed: {child_id}, {e}")
+        return reached
+
+    # ---------- terminal notification (unified entry) ----------
+
+    async def notify_task_terminal(self, task_id: str, terminal_status: str) -> None:
+        """Unified entry called by the external orchestration system after ANY
+        task reaches a terminal state.
+
+        Two directions, both best-effort (T9: failures are logged, never
+        raised — a notification failure must not disturb the caller's flow):
+
+        As a parent (drives readiness + hang prevention):
+        - for each active child: DECR remaining_deps unconditionally
+          (success never auto-votes; pinned), and if
+          terminal_status not in success_words: SADD an automatic cancel
+          vote on the child's behalf.
+
+        As a child (reverse cleanup):
+        - SREM itself from every parent's active_children;
+        - clear its own cancel_votes when it had dependencies.
+
+        Discipline: this method is NEVER invoked by the built-in executor —
+        wiring it at the task-closure point is the composition root's /
+        bridge layer's responsibility.
+        """
+        success = self._is_success(terminal_status)
+
+        # ----- as a parent -----
+        try:
+            for child_id in await self._storage.get_active_children(task_id):
+                await self._notify_one_child(task_id, child_id, terminal_status, success)
+        except Exception as e:
+            logger.warning(f"terminal notify (as parent) degraded: {task_id}, {e}")
+
+        # ----- as a child -----
+        try:
+            rec = await self._storage.get_task(task_id)
+            depends_on = rec.get("depends_on") or []
+            for parent_id in depends_on:
+                await self._storage.srem_active_child(parent_id, task_id)
+            if depends_on:
+                await self._storage.clear_cancel_votes(task_id)
+        except Exception as e:
+            logger.warning(f"terminal notify (as child) degraded: {task_id}, {e}")
+
+    async def _notify_one_child(
+        self, parent_id: str, child_id: str, terminal_status: str, success: bool
+    ) -> None:
+        """Per-child parent-side notification (individual failures logged)."""
+        try:
+            new_value = await self._storage.decr_remaining_deps(child_id)
+            if new_value < 0:
+                logger.warning(
+                    f"remaining_deps went negative after terminal notify: "
+                    f"{child_id} ({new_value}); parent={parent_id}"
+                )
+            if success:
+                # success never auto-votes (prevents accidental cancellation)
+                return
+            rec = await self._storage.get_task(child_id)
+            if not rec:
+                return
+            status = rec.get("status", "")
+            if self._is_terminal(status):
+                return
+            depends_on = rec.get("depends_on") or []
+            if parent_id not in depends_on:
+                return
+            reached = await self._storage.vote_and_check_threshold(
+                child_id, parent_id, len(depends_on)
+            )
+            if reached and self._lifecycle is not None:
+                try:
+                    await self._lifecycle.cancel(child_id)
+                except Exception as e:
+                    logger.warning(f"notify-triggered cancel failed: {child_id}, {e}")
+        except Exception as e:
+            logger.warning(
+                f"terminal notify for child degraded: {child_id}, "
+                f"parent={parent_id}, {e}"
+            )
+
+    # ---------- result consumption audit ----------
+
+    async def result_consumed(self, task_id: str, consumer_id: str) -> None:
+        """Audit a result consumption, deduplicated by (task_id, consumer_id).
+
+        Only the first consumption by a given consumer produces an audit
+        event; repeats are silent. Internal framework get_task() calls never
+        trigger this method — it fires only on explicit invocation.
+        """
+        first = await self._storage.sadd_result_consumer(task_id, consumer_id)
+        if not first:
+            return
+        await self._emit_audit(
+            AuditEvent(
+                event_id=f"consume-{task_id}-{consumer_id}",
+                task_id=task_id,
+                event_type="result_consumed",
+                payload={"consumer": consumer_id},
+            )
+        )
+
+    # ---------- exemption snapshot lifecycle ----------
+
+    async def invalidate_exempt_snapshot(self, task_id: str) -> None:
+        """Reset the exemption snapshot to None (falls back to the live walk).
+
+        Call after reopen_task (new generation) and before re-execution.
+        RecoveryService's rerun path invokes this when a governor is
+        injected; external orchestration systems that reopen on their own
+        carry the same responsibility.
+        """
+        await self._storage.update_task(
+            task_id, {"exempt_resources_snapshot": None}
+        )

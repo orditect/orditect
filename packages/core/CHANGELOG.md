@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - TBD
+
+### Added
+- Dependency-governance primitives on TaskRedisDB (v0.1.1, plain Redis
+  commands — zero Lua changes, lua_contract.md untouched):
+  - active-children notification set: sadd_active_child / srem_active_child
+    / get_active_children
+  - remaining-deps counter: set_remaining_deps / decr_remaining_deps /
+    get_remaining_deps (DECR on a missing key yields -1 — tolerated)
+  - ready scan: list_ready_dep_tasks (SCAN-based, optional caller-injected
+    status filter — vocabulary-neutral, T6)
+  - cancel-vote set: vote_and_check_threshold (SADD + SCARD in one
+    MULTI/EXEC transaction — exactly one concurrent voter observes the
+    threshold), get_cancel_votes, clear_cancel_votes
+  - result-consumer dedup: sadd_result_consumer (True = first time)
+- Attached-key TTL discipline: every dependency key lives under the owning
+  task's hot-record key, expires at the same instant, and follows the hot
+  record's TTL on update_task (best-effort, logged only).
+
+### Changed
+- (none — pure addition; zero behavior change for callers that do not use
+  the new methods)
+
 ## [0.1.0] - TBD
 
 ### Added
