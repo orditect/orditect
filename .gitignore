@@ -1,5 +1,11 @@
-.idea/
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts
 *.egg-info/
 .eggs/
 dist/
 build/
+.pytest_cache/
