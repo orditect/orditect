@@ -1,0 +1,87 @@
+{
+  "$id": "https://orditect.dev/schemas/capabilities/0.1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Declares which storage domain half-interfaces an implementation provides.\n\nEach boolean corresponds to one half-domain (sink = write, query = read).\nDefault False means \"not supported\"; callers must check before invoking.",
+  "properties": {
+    "audit_query": {
+      "default": false,
+      "description": "Declares AuditReader implementation (T8).",
+      "title": "Audit Query",
+      "type": "boolean"
+    },
+    "audit_sink": {
+      "default": false,
+      "description": "Declares AuditWriter implementation (T8).",
+      "title": "Audit Sink",
+      "type": "boolean"
+    },
+    "concurrency_domain": {
+      "default": "process",
+      "description": "Scope within which the adapter's atomicity guarantees hold (T10): process / database / distributed.",
+      "enum": [
+        "process",
+        "database",
+        "distributed"
+      ],
+      "title": "Concurrency Domain",
+      "type": "string"
+    },
+    "content_query": {
+      "default": false,
+      "description": "Declares ContentReader implementation (T8).",
+      "title": "Content Query",
+      "type": "boolean"
+    },
+    "content_sink": {
+      "default": false,
+      "description": "Declares ContentWriter implementation (T8).",
+      "title": "Content Sink",
+      "type": "boolean"
+    },
+    "dependency_query": {
+      "default": false,
+      "description": "Declares DependencyReader implementation (T8).",
+      "title": "Dependency Query",
+      "type": "boolean"
+    },
+    "dependency_sink": {
+      "default": false,
+      "description": "Declares DependencyWriter implementation (T8).",
+      "title": "Dependency Sink",
+      "type": "boolean"
+    },
+    "protocol_compat": {
+      "default": ">=0.1,<0.2",
+      "description": "PEP 440 version specifier of the protocol compatibility range this implementation supports.",
+      "title": "Protocol Compat",
+      "type": "string"
+    },
+    "result_query": {
+      "default": false,
+      "description": "Declares ResultReader implementation (T8).",
+      "title": "Result Query",
+      "type": "boolean"
+    },
+    "result_sink": {
+      "default": false,
+      "description": "Declares ResultWriter implementation (T8).",
+      "title": "Result Sink",
+      "type": "boolean"
+    },
+    "snapshot_query": {
+      "default": false,
+      "description": "Declares SnapshotReader implementation (T8).",
+      "title": "Snapshot Query",
+      "type": "boolean"
+    },
+    "snapshot_sink": {
+      "default": false,
+      "description": "Declares SnapshotWriter implementation (T8).",
+      "title": "Snapshot Sink",
+      "type": "boolean"
+    }
+  },
+  "title": "CapabilitySet",
+  "type": "object",
+  "x-stability": "ratifying"
+}

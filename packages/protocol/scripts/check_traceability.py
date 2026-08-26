@@ -1,10 +1,11 @@
-"""Traceability closure check (B9 freeze gate 3).
+"""Traceability closure check (three-way: terms <-> CF cases <-> DR rules).
 
-Verifies the bidirectional traceability chain between docs/terms.md and the
-conformance suite:
-- Every term (Tn) referenced by a conformance case exists in terms.md.
-- Every conformance case id (CF-XXX-NNN) referenced in terms.md exists in
-  the suite.
+Verifies the bidirectional traceability chain between docs/terms.md, the
+conformance suite (CF-*), and the data-rule registry (DR-*):
+- Every CF case referenced by terms.md exists in the suite, and vice versa.
+- Every DR rule referenced by terms.md exists in the rule registry, and
+  vice versa.
+- All expected terms (T1..T12) exist in terms.md.
 
 Exit code 0 = closure holds; 1 = a gap was found.
 
@@ -20,37 +21,49 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 TERMS = ROOT / "docs" / "terms.md"
 CASES_DIR = ROOT / "src" / "orditect" / "protocol" / "conformance"
+RULES_RUNNER = ROOT / "src" / "orditect" / "protocol" / "rules" / "runner.py"
 
 TERM_RE = re.compile(r"^## (T\d+)\b", re.MULTILINE)
-CASE_IN_TERMS_RE = re.compile(r"\bCF-[A-Z]{3}-\d{3}\b")
+CF_RE = re.compile(r"\bCF-[A-Z]{3}-\d{3}\b")
+DR_RE = re.compile(r"\bDR-[A-Z]{3}-\d{3}\b")
 CASE_DEF_RE = re.compile(r'^@case\("((?:CF)-[A-Z]{3}-\d{3})"\)', re.MULTILINE)
+RULE_DEF_RE = re.compile(r'^\s*"(DR-[A-Z]{3}-\d{3})":', re.MULTILINE)
 
 
 def main() -> int:
     terms_text = TERMS.read_text(encoding="utf-8")
 
     terms_defined = set(TERM_RE.findall(terms_text))
-    cases_in_terms = set(CASE_IN_TERMS_RE.findall(terms_text))
+    cfs_in_terms = set(CF_RE.findall(terms_text))
+    drs_in_terms = set(DR_RE.findall(terms_text))
 
-    cases_defined: set[str] = set()
-    case_files = sorted(CASES_DIR.glob("cases_*.py"))
-    for path in case_files:
-        cases_defined |= set(CASE_DEF_RE.findall(path.read_text(encoding="utf-8")))
+    cfs_defined: set[str] = set()
+    for path in sorted(CASES_DIR.glob("cases_*.py")):
+        cfs_defined |= set(CASE_DEF_RE.findall(path.read_text(encoding="utf-8")))
+
+    drs_defined: set[str] = set()
+    if RULES_RUNNER.is_file():
+        drs_defined = set(
+            RULE_DEF_RE.findall(RULES_RUNNER.read_text(encoding="utf-8"))
+        )
 
     problems: list[str] = []
 
-    # Every case referenced in terms.md must exist in the suite.
-    for case_id in sorted(cases_in_terms - cases_defined):
+    # CF two-way closure
+    for case_id in sorted(cfs_in_terms - cfs_defined):
         problems.append(f"case {case_id} referenced in terms.md but not defined")
-
-    # Every defined case must be referenced in terms.md (closure).
-    for case_id in sorted(cases_defined - cases_in_terms):
+    for case_id in sorted(cfs_defined - cfs_in_terms):
         problems.append(f"case {case_id} defined but not referenced in terms.md")
 
-    # Sanity: at least the 11 terms exist.
-    expected_terms = {f"T{i}" for i in range(1, 12)}
-    missing_terms = expected_terms - terms_defined
-    for term in sorted(missing_terms):
+    # DR two-way closure
+    for rule_id in sorted(drs_in_terms - drs_defined):
+        problems.append(f"rule {rule_id} referenced in terms.md but not registered")
+    for rule_id in sorted(drs_defined - drs_in_terms):
+        problems.append(f"rule {rule_id} registered but not referenced in terms.md")
+
+    # Sanity: all expected terms exist.
+    expected_terms = {f"T{i}" for i in range(1, 13)}
+    for term in sorted(expected_terms - terms_defined):
         problems.append(f"term {term} expected but not found in terms.md")
 
     if problems:
@@ -61,11 +74,11 @@ def main() -> int:
 
     print(
         f"traceability closure OK: {len(terms_defined)} terms, "
-        f"{len(cases_defined)} cases, all cross-references closed."
+        f"{len(cfs_defined)} cases, {len(drs_defined)} rules, "
+        f"all cross-references closed."
     )
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
-

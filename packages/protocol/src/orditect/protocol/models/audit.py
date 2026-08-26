@@ -28,7 +28,8 @@ class AuditEvent(ContractModel):
         event_type: Opaque event type string (protocol embeds no vocabulary).
         source: Originating framework ("core" / "flow" / "stream" / custom).
         payload: Free-form event payload (business-defined).
-        timestamp: Event occurrence time.
+        created_at: Event occurrence time (mechanism time-field vocabulary,
+            unified across domains: created_at / updated_at / expire_at).
     """
 
     event_id: str
@@ -37,4 +38,4 @@ class AuditEvent(ContractModel):
     event_type: str = ""
     source: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)  # noqa: RUF012
-    timestamp: datetime = Field(default_factory=_utc_now)
+    created_at: datetime = Field(default_factory=_utc_now)

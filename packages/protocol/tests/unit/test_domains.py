@@ -204,3 +204,49 @@ class TestSnapshotProtocols:
             "get_ancestors", "query", "aggregate",
         }
         assert expected <= set(SnapshotReader.__protocol_attrs__)  # type: ignore[attr-defined]
+
+from orditect.protocol import DependencyReader, DependencyWriter
+from orditect.protocol.models import DependencyEdge, DependencyGraph
+
+
+class _FullDependencyStore:
+    """Minimal structural implementation of both dependency half-domains."""
+
+    @property
+    def capabilities(self) -> CapabilitySet:
+        return CapabilitySet(dependency_sink=True, dependency_query=True)
+
+    async def write_dependency(self, edge: DependencyEdge) -> None:
+        return None
+
+    async def read_graph(self, root_task_id: str) -> DependencyGraph:
+        return DependencyGraph(root_task_id=root_task_id)
+
+    async def all_edges(self) -> list[DependencyEdge]:
+        return []
+
+    async def children_of(self, parent_task_id: str) -> list[str]:
+        return []
+
+    async def parents_of(self, child_task_id: str) -> list[str]:
+        return []
+
+
+@pytest.mark.unit
+class TestDependencyProtocols:
+    def test_writer_runtime_checkable(self):
+        assert isinstance(_FullDependencyStore(), DependencyWriter)
+
+    def test_reader_runtime_checkable(self):
+        assert isinstance(_FullDependencyStore(), DependencyReader)
+
+    def test_non_conforming_rejected(self):
+        assert not isinstance(_NotAStore(), DependencyWriter)
+        assert not isinstance(_NotAStore(), DependencyReader)
+
+    def test_writer_method_surface(self):
+        assert "write_dependency" in set(DependencyWriter.__protocol_attrs__)  # type: ignore[attr-defined]
+
+    def test_reader_method_surface(self):
+        expected = {"read_graph", "all_edges", "children_of", "parents_of"}
+        assert expected <= set(DependencyReader.__protocol_attrs__)  # type: ignore[attr-defined]

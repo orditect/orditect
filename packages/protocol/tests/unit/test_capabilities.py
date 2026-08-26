@@ -62,3 +62,55 @@ class TestCapabilitySetSerialization:
         caps = CapabilitySet()
         with pytest.raises(ValidationError):
             caps.content_sink = True  # type: ignore[misc]
+
+@pytest.mark.unit
+class TestCapabilitySetDependencyDomains:
+    def test_new_half_domains_default_false(self):
+        caps = CapabilitySet()
+        assert caps.dependency_sink is False
+        assert caps.dependency_query is False
+
+    def test_supports_new_half_domains(self):
+        caps = CapabilitySet(dependency_sink=True)
+        assert caps.supports("dependency_sink") is True
+        assert caps.supports("dependency_query") is False
+
+    def test_legacy_json_without_new_fields_deserializes(self):
+        """Backward compat: 8-field JSON (pre-dependency) must still parse,
+        new fields defaulting to False (BaseModel extra=ignore)."""
+        legacy = {
+            "content_sink": True, "content_query": True,
+            "audit_sink": False, "audit_query": False,
+            "result_sink": False, "result_query": False,
+            "snapshot_sink": True, "snapshot_query": True,
+            "protocol_compat": ">=0.1,<0.2",
+        }
+        caps = CapabilitySet(**legacy)
+        assert caps.content_sink is True
+        assert caps.dependency_sink is False
+        assert caps.dependency_query is False
+
+@pytest.mark.unit
+class TestConcurrencyDomain:
+    def test_default_is_process(self):
+        assert CapabilitySet().concurrency_domain == "process"
+
+    def test_three_legal_values(self):
+        for domain in ("process", "database", "distributed"):
+            caps = CapabilitySet(concurrency_domain=domain)
+            assert caps.concurrency_domain == domain
+
+    def test_illegal_value_rejected(self):
+        with pytest.raises(ValidationError):
+            CapabilitySet(concurrency_domain="cluster")  # type: ignore[arg-type]
+
+    def test_legacy_json_without_field_defaults_process(self):
+        """Backward compat: pre-T10-revision JSON parses with the default."""
+        legacy = {"snapshot_sink": True, "protocol_compat": ">=0.1,<0.2"}
+        caps = CapabilitySet(**legacy)
+        assert caps.concurrency_domain == "process"
+
+    def test_serialization_round_trip(self):
+        caps = CapabilitySet(concurrency_domain="database")
+        restored = CapabilitySet(**caps.model_dump())
+        assert restored.concurrency_domain == "database"

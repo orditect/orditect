@@ -18,6 +18,8 @@ from orditect.protocol.domains import (
     AuditWriter,
     ContentReader,
     ContentWriter,
+    DependencyReader,
+    DependencyWriter,
     ResultReader,
     ResultWriter,
     SnapshotReader,
@@ -27,12 +29,15 @@ from orditect.protocol.errors import (
     ContractError,
     ContentNotFoundError,
     IdempotencyConflictError,
+    InvalidQueryError,
     SnapshotNotFoundError,
     TerminalStateViolationError,
     UnsupportedCapabilityError,
 )
 from orditect.protocol.models import (
     AuditEvent,
+    DependencyEdge,
+    DependencyGraph,
     Page,
     Sort,
     SortDirection,
@@ -40,6 +45,7 @@ from orditect.protocol.models import (
     TaskSnapshot,
     TimeRange,
 )
+from orditect.protocol.rules import run_rules
 
 try:
     __version__ = _pkg_version("orditect-protocol")
@@ -53,6 +59,7 @@ __all__ = [
     "ContractError",
     "ContentNotFoundError",
     "IdempotencyConflictError",
+    "InvalidQueryError",
     "SnapshotNotFoundError",
     "TerminalStateViolationError",
     "UnsupportedCapabilityError",
@@ -60,6 +67,8 @@ __all__ = [
     "CapabilitySet",
     # models
     "AuditEvent",
+    "DependencyEdge",
+    "DependencyGraph",
     "Page",
     "Sort",
     "SortDirection",
@@ -71,8 +80,11 @@ __all__ = [
     "AuditReader",
     "ContentWriter",
     "ContentReader",
+    "DependencyWriter",
+    "DependencyReader",
     "ResultWriter",
     "ResultReader",
     "SnapshotWriter",
     "SnapshotReader",
+    "run_rules",
 ]

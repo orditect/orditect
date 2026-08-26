@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "DependencyEdge": {
+      "description": "One directed dependency fact: child depends on parent.\n\nIdempotency key = (child_id, parent_id): re-writing with an identical\npayload is a silent dedup; with a different is_primary it is a conflict\n(IdempotencyConflictError, T4).\n\nAttributes:\n    child_id: Dependent task id (opaque reference, T6).\n    parent_id: Dependency task id. Binds the task, not an execution\n        generation (T12).\n    is_primary: Primary-parent flag — the single chain used for lineage\n        and exemption inheritance.\n    registered_at: Edge registration instant, timezone-aware UTC (T7).",
+      "properties": {
+        "child_id": {
+          "description": "Dependent task id (opaque reference, T6/T12).",
+          "title": "Child Id",
+          "type": "string"
+        },
+        "is_primary": {
+          "default": false,
+          "description": "Primary-parent flag: the single chain used for lineage and exemption inheritance.",
+          "title": "Is Primary",
+          "type": "boolean"
+        },
+        "parent_id": {
+          "description": "Dependency task id. Binds the task, not an execution generation (T12).",
+          "title": "Parent Id",
+          "type": "string"
+        },
+        "registered_at": {
+          "description": "Edge registration instant, timezone-aware UTC (T7).",
+          "format": "date-time",
+          "pattern": "(Z|[+-]\\d{2}:\\d{2})$",
+          "title": "Registered At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "child_id",
+        "parent_id"
+      ],
+      "title": "DependencyEdge",
+      "type": "object"
+    },
+    "DependencyGraph": {
+      "description": "Dependency neighbourhood returned by read_graph.\n\nThe transitive closure reachable from root_task_id along edges in BOTH\ndirections (upstream \"what I depend on\" + downstream \"who depends on\nme\"), cycle-safe by construction of the reader. task_ids are identifiers\nonly — no node properties (pure-edge discipline, T12). root_task_id is\nalways present in task_ids, even when it has no edges.\n\nAttributes:\n    root_task_id: The root this neighbourhood was read from.\n    task_ids: All reachable task identifiers (sorted for determinism).\n    edges: All edges whose child_id is within the closure.",
+      "properties": {
+        "edges": {
+          "description": "All edges whose child_id is within the closure.",
+          "items": {
+            "$ref": "#/$defs/DependencyEdge"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "root_task_id": {
+          "description": "The root this neighbourhood was read from.",
+          "title": "Root Task Id",
+          "type": "string"
+        },
+        "task_ids": {
+          "description": "All reachable task identifiers (sorted, ids only — pure-edge discipline, T12).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Task Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "root_task_id"
+      ],
+      "title": "DependencyGraph",
+      "type": "object"
+    }
+  },
+  "$id": "https://orditect.dev/schemas/dependency/0.1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueryModels",
+  "x-stability": "ratifying"
+}

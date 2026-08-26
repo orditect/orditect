@@ -1,4 +1,9 @@
-"""Result-domain conformance cases (CF-RST-*)."""
+"""Result-domain conformance cases (CF-RST-*).
+
+Authoring discipline: one adapter instance runs the WHOLE suite in a single
+event loop — every case MUST use case-unique task_id / stream_id / key
+prefixes, never shared placeholders.
+"""
 
 from __future__ import annotations
 

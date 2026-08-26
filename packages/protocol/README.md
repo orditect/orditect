@@ -51,7 +51,7 @@ the half-domains it supports via `CapabilitySet`; the rest must raise
 | Audit    | `AuditWriter`    | `AuditReader`    | Append-only idempotent event log |
 | Result   | `ResultWriter`   | `ResultReader`   | Stream manifests with true TTL |
 | Snapshot | `SnapshotWriter` | `SnapshotReader` | Execution snapshots + tree/version queries |
-
+| Dependency | `DependencyWriter` | `DependencyReader` | Pure-edge dependency facts + graph queries (T12) |
 ## Consistency terms
 
 Eleven normative terms (lease model, terminal irreversibility, idempotency,
@@ -61,23 +61,52 @@ identity alignment, cross-media alignment) are frozen in
 [`docs/terms.md`](docs/terms.md). Every protocol method's docstring references
 the terms it enforces.
 
-## Implementing an adapter
+## Implementing against the contract
 
-1. Implement the half-domains you support, structured as per-domain parts
-   (see `orditect-adapter-memory` for the reference structure).
-2. Expose a `CapabilitySet` declaring them.
-3. Run the conformance kit in your own test suite:
+Three implementation shapes, three compliance tiers:
+
+### Storage backend (full)
+
+Implement the half-domains you support, structured as per-domain parts
+(see `orditect-adapter-memory` for the reference structure), declare them
+in a `CapabilitySet` — sink and query **in pairs** — and certify:
 
 ```python
 from orditect.protocol.conformance import run_conformance
 
 def test_conformance():
-    report = run_conformance(my_store.snapshot)
+    report = run_conformance(my_store.snapshot, profile="full")
+    assert report.eligibility_error is None
     assert report.failed == 0, report.summary()
 ```
 
-The kit skips undeclared half-domains (T8) and fails on any contract
-violation. **Passing the kit is the only compatibility certification.**
+
+### Bridge / external-framework producer (producer)
+
+A bridge only needs to **write** correctly: implement the sink half-domains
+(`snapshot_sink` + `audit_sink` is a typical start, plus `dependency_sink`
+when wiring dependency governance) and certify under the producer tier:
+```python
+report = run_conformance(my_bridge, profile="producer")
+assert report.failed == 0, report.summary()
+```
+
+Business vocabulary of the external framework is translated to opaque
+strings at the bridge edge — never flowing back into any framework package
+(see docs/bridge-discipline.md).
+
+### Read-only consumer (consumer)
+
+Visualization / diagnostics tools implement the query half-domains and,
+for deep read verification, the `seed()` hook:
+```python
+report = run_conformance(my_viewer, profile="consumer")
+assert report.failed == 0, report.summary()
+```
+**Passing the kit under the appropriate tier is the only compatibility
+certification.** Undeclared half-domains skip, never fail (T8).
+
+
 
 ## Versioning
 
