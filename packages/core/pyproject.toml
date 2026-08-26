@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orditect-core"
-version = "0.1.0"
+version = "0.1.1"
 description = "Async task governance engine for the Orditect ecosystem: Redis task store, distributed lease semaphore & token bucket"
 readme = "README.md"
 requires-python = ">=3.12"

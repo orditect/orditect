@@ -1,10 +1,11 @@
-"""v0.3.0 批次 4 钉扎：R9 资源账 + 谱系豁免（递归组合反自锁）。
 
-验收场景：
-- 默认 task_execution 同名嵌套（原必炸场景）→ 豁免，不排队自锁
-- 不同名嵌套 → 正常双 acquire 双 release
-- 豁免路径 finally 不误释放祖先名额
-- 无谱系/查询失败 → 安全默认正常 acquire
+"""Pinning: R9 Resource Account + Lineage Exemption (Recursive Composition Anti-Deadlock).
+
+Acceptance scenarios:
+- Default task_execution same-name nesting (original guaranteed deadlock scenario) → exempt, no queuing self-lock
+- Different-name nesting → normal double acquire double release
+- Exempt path finally does not incorrectly release ancestor quota
+- No lineage / query failure → safe default normal acquire
 """
 import asyncio
 import time
@@ -17,7 +18,7 @@ from orditect.flow.exceptions import TaskNotFoundError
 
 
 class FakeStorage:
-    """支持谱系 + 资源账字段的内存存储。"""
+    """In-memory storage supporting lineage + resource account fields."""
 
     def __init__(self):
         self._tasks: Dict[str, Dict[str, Any]] = {}
@@ -64,7 +65,7 @@ class FakeStorage:
 
 
 class CountingGovernor:
-    """容量可配的计数 governor（默认 task_execution 容量 1——嵌套即排队）。"""
+    """Counting governor with configurable capacity (default task_execution capacity 1 — nesting queues)."""
 
     def __init__(self, capacity: int = 1):
         self.capacity = capacity
@@ -101,14 +102,14 @@ async def _wait_for(predicate, timeout: float = 3.0, interval: float = 0.02):
 
 
 class TestSameResourceExemption:
-    """R9 核心验收：同名资源嵌套豁免（原"嵌套必炸"场景）。"""
+    """R9 core acceptance: same-resource nesting exemption (original "nesting will deadlock" scenario)."""
 
     async def test_nested_same_resource_no_self_lock(self):
-        """capacity=1 时父持 task_execution，子嵌套同名 → 豁免，不排队自锁。"""
+        """capacity=1, parent holds task_execution, child nested same name → exempt, no queuing self-lock."""
         storage = FakeStorage()
-        governor = CountingGovernor(capacity=1)  # 容量 1：不豁免则子必排队超时
+        governor = CountingGovernor(capacity=1)  # capacity 1: without exemption child would queue and timeout
         orchestrator = TaskOrchestrator(storage, governor)
-        orchestrator.executor.acquire_timeout = 0.3  # 排队超时缩短，快速暴露自锁
+        orchestrator.executor.acquire_timeout = 0.3  # short queue timeout to expose self-lock quickly
         child_done = asyncio.Event()
 
         class ChildTask(BaseBackEndTask):
@@ -142,7 +143,7 @@ class TestSameResourceExemption:
         assert governor.in_use == 0
 
     async def test_three_level_nesting_single_acquire(self):
-        """三层同名嵌套 → 仅顶层 acquire 一次（整棵子树豁免）。"""
+        """Three levels of same-name nesting → only one acquire at top level (whole subtree exempt)."""
         storage = FakeStorage()
         governor = CountingGovernor(capacity=1)
         orchestrator = TaskOrchestrator(storage, governor)
@@ -173,12 +174,12 @@ class TestSameResourceExemption:
             timeout=3.0,
         )
 
-        assert governor.acquired == ["task_execution"]  # 全程一次
+        assert governor.acquired == ["task_execution"]  # once for the whole run
         assert governor.released == ["task_execution"]
 
 
 class TestDifferentResourceNormal:
-    """不同名资源嵌套 → 正常双 acquire。"""
+    """Different-name resource nesting → normal double acquire."""
 
     async def test_different_resource_both_acquire(self):
         storage = FakeStorage()
@@ -210,10 +211,10 @@ class TestDifferentResourceNormal:
 
 
 class TestExemptionSafetyDefaults:
-    """豁免的安全默认行为。"""
+    """Safe default behaviors for exemption."""
 
     async def test_no_lineage_normal_acquire(self):
-        """顶层任务（无谱系）→ 正常 acquire。"""
+        """Top-level task (no lineage) → normal acquire."""
         storage = FakeStorage()
         governor = CountingGovernor(capacity=1)
         orchestrator = TaskOrchestrator(storage, governor)
@@ -229,7 +230,7 @@ class TestExemptionSafetyDefaults:
         assert governor.acquired == ["task_execution"]
 
     async def test_lineage_query_failure_falls_back_to_acquire(self):
-        """谱系查询失败 → 安全默认正常 acquire（不误豁免）。"""
+        """Lineage query failure → safe default normal acquire (not incorrectly exempt)."""
         class BrokenLineageStorage(FakeStorage):
             async def get_task(self, task_id):
                 # error when querying parent
@@ -253,10 +254,10 @@ class TestExemptionSafetyDefaults:
         # note: executor's _is_cancel_requested also fails (returns False), continue execution
         result = await orchestrator.executor.execute("child", SimpleTask(storage))
         assert result == {"ok": True}
-        assert "task_execution" in governor.acquired  # 正常 acquire（未误豁免）
+        assert "task_execution" in governor.acquired  # normal acquire (not incorrectly exempt)
 
     async def test_ancestor_without_resource_continues_upward(self):
-        """中间祖先未持资源 → 继续上溯到持资源的祖先。"""
+        """Intermediate ancestor without resource → continue tracing up to ancestor holding resource."""
         storage = FakeStorage()
         governor = CountingGovernor(capacity=1)
         orchestrator = TaskOrchestrator(storage, governor)
@@ -275,4 +276,4 @@ class TestExemptionSafetyDefaults:
         # leaf execution: trace up mid (no resource) → root (has task_execution) → same-name exempt
         result = await orchestrator.executor.execute("leaf", SimpleTask(storage))
         assert result == {"ok": True}
-        assert governor.acquired == []  # 豁免，未新 acquire
+        assert governor.acquired == []

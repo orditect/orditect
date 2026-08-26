@@ -126,13 +126,13 @@ class TaskExecutor:
         try:
             rec = await self.storage.get_task(task_id)
         except Exception:
-            return resources  # 查询失败：安全默认正常 acquire
+            return resources
 
         visited = {task_id}
         for _ in range(self._MAX_LINEAGE_DEPTH):
             parent = rec.get("parent_task_id")
             if parent is None:
-                return resources  # 已到根
+                return resources
             if parent in visited:
                 logger.warning(f"Lineage cycle detected at: {parent}")
                 return resources
@@ -146,7 +146,7 @@ class TaskExecutor:
             ancestor_resource = parent_rec.get("resource")
             if ancestor_resource:
                 resources.add(ancestor_resource)
-            rec = parent_rec  # 上溯：复用已查记录，不再重复查询
+            rec = parent_rec
         return resources
 
     def is_running(self, task_id: str) -> bool:
@@ -331,9 +331,25 @@ class TaskExecutor:
                 logger.info(f"Task cancelled before acquire (TOCTOU guard): {task_id}")
                 raise asyncio.CancelledError()
 
-            # 1. R9/F2: lineage duplicate check — any ancestor already holds same resource name then exempt (parent quota covers entire subtree)
+            # 1. R9/F2 + v0.1.1: exemption check — the snapshot frozen at
+            #    registration wins over the live ancestor walk when present.
             if self.governor:
-                ancestor_resources = await self._find_ancestor_resources(task_id)
+                try:
+                    rec = await self.storage.get_task(task_id)
+                    snapshot = rec.get("exempt_resources_snapshot")
+                except Exception as e:
+                    logger.warning(
+                        f"exemption snapshot read failed (fallback to walk): "
+                        f"{task_id}, {e}"
+                    )
+                    snapshot = None
+                if snapshot is not None:
+                    # v0.1.1: exemption snapshot frozen at registration
+                    # (invalidated via invalidate_exempt_snapshot on reopen);
+                    # an empty list means "explicitly no exemption".
+                    ancestor_resources: set[str] = set(snapshot)
+                else:
+                    ancestor_resources = await self._find_ancestor_resources(task_id)
                 if resource_name in ancestor_resources:
                     inherited = True
                     logger.info(
