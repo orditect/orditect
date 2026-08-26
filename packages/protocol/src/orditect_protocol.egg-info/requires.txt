@@ -1,5 +1,0 @@
-pydantic<3,>=2.5
-
-[conformance]
-pytest>=8.0
-pytest-asyncio>=0.26
