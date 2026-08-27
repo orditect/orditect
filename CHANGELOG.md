@@ -1,5 +1,46 @@
+# Changelog
 
 # Changelog
+
+## [0.1.3] - TBD
+
+**v0.1.3 = three-category protocolization.** Core / adapters / bridges
+communicate through protocols, not implementations. Reference
+implementations prove the protocols work; swap tests prove they're
+interchangeable.
+
+### Added
+- **GovernedCallClient** (flow): standard form of one governed call
+  (GovernedClient + observation + opaque labels).
+- **call_id dual-habitat idempotency**: quota hot path and audit cold path
+  share the same call_id.
+- **ActionDispatcher** (flow): asynchronous action executor (command-queue
+  form, DD-013).
+- **orditect-adapter-local**: local-file storage adapter (document-family
+  reference, full profile).
+- **orditect-adapter-ui**: UI adapter reference (consumer read + action
+  sink).
+- **orditect-bridge-openai**: OpenAI-compatible endpoint bridge (producer
+  tier reference).
+- **check_import_boundary.py** gate: package dependency enforcement.
+
+### Changed
+- Action sink form: direct invocation → command-queue (DD-013 bypass).
+
+### Verification
+- adapter-local: full profile ✅
+- bridge-openai: producer profile ✅
+- adapter-ui: consumer + action profiles ✅
+- End-to-end governance loop verified ✅
+- Swap tests: adapters/bridges interchangeable ✅
+- All CI gates green ✅
+
+### Freeze criteria progress
+- Document backend: ✅ (adapter-local)
+- External producer: ✅ (bridge-openai)
+- UI interaction: ✅ (adapter-ui)
+- Relational backend: ❌ (PG, commercial layer)
+
 
 ## [0.1.2] - 2026-08-28
 

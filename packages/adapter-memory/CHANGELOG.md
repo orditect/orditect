@@ -1,3 +1,11 @@
+# Changelog
+
+## [0.1.3] - TBD
+
+### Changed
+- Version alignment with ecosystem (additive only, no behavior change).
+- Dependency floor check: protocol imports predate 0.1.3; floor stays >=0.1,<0.2.
+
 ## [0.1.2] - TBD
 
 ### Added
