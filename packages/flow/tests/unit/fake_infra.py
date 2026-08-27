@@ -15,6 +15,7 @@ from orditect.flow.exceptions import (
     InvalidStateTransitionError,
     TaskNotFoundError,
 )
+from orditect.protocol import DependencyEdge, DependencyGraph
 
 _FAKE_TERMINAL_WORDS: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
 
@@ -174,3 +175,52 @@ class FakeGovernanceStorage:
             return False
         consumers.add(consumer_id)
         return True
+
+class FakeDepGraphStore:
+    """In-memory dependency-graph store double (protocol-aligned, T12).
+
+    Single source for the governance test suite — previously three test
+    files each defined their own variant; they now import this one.
+    """
+
+    def __init__(self, fail: bool = False) -> None:
+        self._edges: dict[tuple[str, str], DependencyEdge] = {}
+        self._fail = fail
+
+    async def write_dependency(self, edge: DependencyEdge) -> None:
+        if self._fail:
+            raise RuntimeError("cold store down")
+        key = (edge.child_id, edge.parent_id)
+        existing = self._edges.get(key)
+        if existing is None or existing.is_primary == edge.is_primary:
+            self._edges[key] = edge
+            return
+        raise RuntimeError("edge conflict (test double)")
+
+    async def read_graph(self, root_id: str) -> DependencyGraph:
+        from collections import deque
+        adjacency: dict[str, set[str]] = {}
+        for child_id, parent_id in self._edges:
+            adjacency.setdefault(child_id, set()).add(parent_id)
+            adjacency.setdefault(parent_id, set()).add(child_id)
+        visited = {root_id}
+        queue: deque[str] = deque([root_id])
+        while queue:
+            node = queue.popleft()
+            for nxt in adjacency.get(node, ()):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    queue.append(nxt)
+        edges = [e for e in self._edges.values() if e.child_id in visited]
+        return DependencyGraph(
+            root_task_id=root_id, task_ids=sorted(visited), edges=edges,
+        )
+
+    async def all_edges(self) -> list[DependencyEdge]:
+        return list(self._edges.values())
+
+    # test-side convenience (not part of the protocol surface)
+    @property
+    def edges(self) -> list[tuple[str, str, bool]]:
+        return [(e.child_id, e.parent_id, e.is_primary)
+                for e in self._edges.values()]

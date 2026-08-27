@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - TBD
+
+### Changed
+- DependencyGovernor's dep_graph_store aligned to the protocol dependency
+  domain: write_dependency takes a DependencyEdge; read_graph returns a
+  DependencyGraph (was duck-typed dicts). Behavior unchanged.
+- Dependency floor raised: orditect-protocol>=0.1.2 (imports DependencyEdge).
+
 ## [0.1.1] - TBD
 
 Multi-parent dependency governance (passive protocol-layer API).

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - TBD
+
+### Changed
+- Version bump only (no functional change; keeps the ecosystem version line
+  aligned). Dependency floor check: protocol imports predate 0.1.2; floor
+  stays >=0.1,<0.2.
+
 ## [0.1.0] - TBD
 
 First release as orditect-stream (renamed from fastapi-taskstream).

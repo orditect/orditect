@@ -1,0 +1,38 @@
+name: gates
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # All gate scripts are stdlib-only: no pip install, so the gates run
+      # before (and independently of) the code they check.
+      - name: business-neutrality gate
+        run: python scripts/gates/check_business_neutrality.py
+
+      - name: import-boundary gate
+        run: python scripts/gates/check_import_boundary.py
+
+      - name: api-surface gate
+        run: python scripts/gates/check_api_surface.py
+
+      - name: schema-vocabulary gate
+        run: python scripts/gates/check_schema_vocabulary.py
+
+      - name: lua-time-source gate
+        run: python scripts/gates/check_lua_time_source.py
+
+      - name: error-surface gate
+        run: python scripts/gates/check_error_surface.py
+
+      - name: traceability closure (protocol)
+        run: python packages/protocol/scripts/check_traceability.py

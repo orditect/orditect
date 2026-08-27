@@ -8,11 +8,13 @@ from orditect.protocol import (
     AuditEvent,
     CapabilitySet,
     IdempotencyConflictError,
+    InvalidQueryError,
     Page,
     Sort,
     SortDirection,
     TimeRange,
 )
+from orditect.protocol.mechanism import SORT_FIELDS
 
 
 class MemoryAuditPart:
@@ -57,13 +59,18 @@ class MemoryAuditPart:
             rows = [e for e in rows if e.event_type == event_type]
         if time_range is not None:
             if time_range.start is not None:
-                rows = [e for e in rows if e.timestamp >= time_range.start]
+                rows = [e for e in rows if e.created_at >= time_range.start]
             if time_range.end is not None:
-                rows = [e for e in rows if e.timestamp < time_range.end]
+                rows = [e for e in rows if e.created_at < time_range.end]
 
         sort = sort or Sort()
+        if sort.field not in SORT_FIELDS["audit"]:
+            raise InvalidQueryError(
+                f"sort.field {sort.field!r} outside the audit mechanism "
+                f"whitelist: {sorted(SORT_FIELDS['audit'])}"
+            )
         reverse = sort.direction is SortDirection.DESC
-        rows.sort(key=lambda e: getattr(e, sort.field, e.timestamp), reverse=reverse)
+        rows.sort(key=lambda e: getattr(e, sort.field), reverse=reverse)
 
         page = page or Page()
         return rows[page.offset: page.offset + page.limit]
