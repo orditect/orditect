@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orditect-bridge-openai"
+version = "0.1.3"
+description = "OpenAI-compatible endpoint bridge for the Orditect ecosystem: governed LLM calls with audit, budget, and observability (bridge reference implementation)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Orditect Contributors" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.27.0",
+    "orditect-protocol>=0.1,<0.2",
+    "orditect-core>=0.1,<0.2",
+    "orditect-flow>=0.1,<0.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.26",
+    "orditect-adapter-memory>=0.1,<0.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"orditect.bridge.openai" = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "unit: pure logic tests, no external dependencies",
+]

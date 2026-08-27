@@ -22,16 +22,19 @@
 
 ## Packages
 
-This repository is a **monorepo** of five independently versioned Python packages under the `orditect.*` namespace:
+This repository is a **monorepo** of eight independently versioned Python
+packages under the `orditect.*` namespace:
 
 | Package | Description |
 | :--- | :--- |
 | [`orditect-core`](packages/core) | Governance engine – Redis + Lua task store, lease semaphore, token bucket, `reopen` primitive. |
-| [`orditect-flow`](packages/flow) | Orchestration & recovery – recursive composition, cascade cancellation, `RecoveryService`. |
+| [`orditect-flow`](packages/flow) | Orchestration & recovery – recursive composition, cascade cancellation, `RecoveryService`, `GovernedCallClient`, `ActionDispatcher`. |
 | [`orditect-stream`](packages/stream) | Output plane – SSE protocol, placeholders, mux, disconnect policies, FastAPI integration. |
-| [`orditect-protocol`](packages/protocol) | Storage contracts – 4 domains, 8 protocols, 11 normative terms, conformance test kit. |
-| [`orditect-adapter-memory`](packages/adapter-memory) | Reference adapter – in‑memory implementation passing the full conformance suite. |
-
+| [`orditect-protocol`](packages/protocol) | Storage contracts – 5 domains, 10 protocols, 12 normative terms, conformance test kit. |
+| [`orditect-adapter-memory`](packages/adapter-memory) | Reference adapter – in-memory implementation passing the full conformance suite. |
+| [`orditect-adapter-local`](packages/adapter-local) | Local-file adapter – document-family reference, trace-bundle producer. |
+| [`orditect-adapter-ui`](packages/adapter-ui) | UI adapter reference – trace-bundle consumer + action sink (HITL/MCP/agent). |
+| [`orditect-bridge-openai`](packages/bridge-openai) | OpenAI-compatible endpoint bridge – governed LLM calls (producer tier reference). |
 ---
 
 ## Quick Start
@@ -68,6 +71,40 @@ print(record["status"], record.get("result"))
 For streaming output, recovery, and adapter development, see the [documentation](#documentation) section.
 
 ---
+## Three-Category Integration Example
+
+```python
+from orditect.adapter.local import LocalFileStore
+from orditect.adapter.ui import TraceBundleReader, ActionSinkAdapter, MemoryActionQueue
+from orditect.bridge.openai import GovernedLLMClient
+from orditect.flow import BudgetLedger
+from orditect.flow.actions import ActionDispatcher
+
+# Storage adapter (trace bundle producer)
+store = LocalFileStore("/var/lib/myapp/trace")
+
+# Bridge (governed LLM calls)
+llm = GovernedLLMClient(
+    "https://api.openai.com",
+    governor=governor, resource="llm",
+    budget=ledger,
+    audit_writer=store.audit,
+    model="gpt-4o",
+)
+
+# UI adapter (consumer read + action sink)
+reader = TraceBundleReader("/var/lib/myapp/trace")
+queue = MemoryActionQueue()
+sink = ActionSinkAdapter(queue)
+dispatcher = ActionDispatcher(queue, orchestrator, recovery)
+
+# Full governance loop
+await dispatcher.start()
+result = await llm.chat(messages=[...])  # sem + budget + audit + content
+tree = await reader.snapshot.get_tree("root")  # observability
+receipt = await sink.pause_node("task-123")  # HITL/MCP/agent intervention
+```
+See `docs/integration-guide.md` for the complete integration guide.
 
 ## Documentation
 
@@ -80,7 +117,7 @@ For streaming output, recovery, and adapter development, see the [documentation]
 | [Flow Recovery](packages/flow/docs/recovery.md) | Resume / rerun design, execution dispatch, and pause semantics. |
 | [Stream Protocol](packages/stream/docs/protocol.md) | SSE event schema, cancel sequences, and pause/resume decisions. |
 | [Adapter Guide](packages/protocol/README.md) | How to implement a storage adapter and run the conformance suite. |
-
+| [Integration Guide](docs/integration-guide.md) | Three-category integration with certification checklist. |
 ---
 
 ## Installation

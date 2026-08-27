@@ -29,6 +29,29 @@ PACKAGES: dict[str, dict[str, object]] = {
         "namespace": "orditect.adapter.memory",
         "allowed_internal": frozenset({"orditect.protocol"}),
     },
+    "adapter-local": {
+        "path": "packages/adapter-local",
+        "namespace": "orditect.adapter.local",
+        "allowed_internal": frozenset({"orditect.protocol"}),
+    },
+    "bridge-openai": {
+        "path": "packages/bridge-openai",
+        "namespace": "orditect.bridge.openai",
+        "allowed_internal": frozenset({
+            "orditect.protocol",
+            "orditect.core",
+            "orditect.flow",
+            "orditect.stream",
+        }),
+    },
+    "adapter-ui": {
+        "path": "packages/adapter-ui",
+        "namespace": "orditect.adapter.ui",
+        "allowed_internal": frozenset({
+            "orditect.protocol",
+            "orditect.flow",
+        }),
+    },
     "flow": {
         "path": "packages/flow",
         "namespace": "orditect.flow",

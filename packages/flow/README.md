@@ -60,6 +60,27 @@ plan = await svc.rerun(root_task_id, scope={"node_a", "node_b"})
 Snapshot persistence is opt-in (`snapshot_sink` on the orchestrator) — zero
 cost by default. See [docs/recovery.md](docs/recovery.md).
 
+### Governed Calls & Actions (v0.1.3)
+
+Standard form for governed resource calls and protocolized action channel:
+
+```python
+from orditect.flow import GovernedCallClient, ActionDispatcher
+
+# Governed call (semaphore + budget + audit + content)
+client = GovernedCallClient(
+    governor, "llm", handler=call_llm,
+    budget=ledger, audit_writer=audit, task_id=task_id,
+)
+result = await client.call(call_id="c-1")
+
+# Action sink (command-queue form for HITL/MCP/agent)
+dispatcher = ActionDispatcher(queue, orchestrator, recovery)
+await dispatcher.start()
+```
+See `docs/integration-guide.md` for the three-category integration guide.
+
+
 ## Installation
 
 ```bash

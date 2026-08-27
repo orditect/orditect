@@ -1,0 +1,355 @@
+"""GovernedCallClient: the standard form of one governed call.
+
+Composes the established governance half (GovernedClient: cancel pre-check ->
+budget pre-check -> acquire -> execute -> charge -> shielded release) with an
+observation half (audit record + content pointer-ization) and three opaque
+labels (task_id / parent_task_id / execution_id).
+
+Design discipline:
+- Composition, not reinvention: the non-streaming path delegates to
+  GovernedClient unchanged; this client only adds observation around it.
+- Vocabulary neutrality: event_type / payload keys are caller-injected
+  vocabulary; this module embeds none.
+- Observation non-blocking (T9): audit and pointer writes are wrapped so a
+  failing sink never disturbs the call path.
+- Idempotency (T4): one call one call_id; the audit record uses
+  event_id == call_id, so a retry with the same call_id dedups at the audit
+  storage layer exactly like the quota layer dedups the charge.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+import uuid
+from collections.abc import AsyncIterator, Callable
+from typing import Any
+
+from orditect.flow.governor.client import GovernedClient, Handler
+from orditect.flow.protocols.governor import ResourceGovernorProtocol
+from orditect.protocol import AuditEvent
+
+logger = logging.getLogger(__name__)
+
+#: payload_fn: call result -> audit payload dict (caller-injected vocabulary).
+PayloadFn = Callable[[Any], dict]
+#: content_fn: call result -> bytes worth pointer-izing (None = nothing).
+ContentFn = Callable[[Any], "bytes | None"]
+#: result_fn: () -> final aggregated result of a stream (None when the source
+#: never reports one, e.g. a stream without usage).
+ResultFn = Callable[[], Any]
+#: partial_fn: () -> partial bytes accumulated up to cancellation.
+PartialFn = Callable[[], "bytes | None"]
+
+
+class GovernedCallClient:
+    """Standard form of one governed call (mechanism only, no business words).
+
+    Args:
+        governor: Resource governance instance.
+        resource: Resource name for semaphore routing.
+        handler: Default callable; may be overridden per call.
+        timeout: Acquire wait bound in seconds.
+        budget: BudgetLedger (optional). Pre-check before acquire; post-charge
+            after success via cost_fn.
+        cost_fn: result -> units for budget charging. Receives the raw result
+            (call) or the aggregated stream result (call_streaming, possibly
+            None when the source reports no usage — the business prices it).
+        audit_writer: Protocol AuditWriter (optional). When set, exactly one
+            AuditEvent is written per call at completion (ok / error /
+            cancelled) with event_id == call_id.
+        content_writer: Protocol ContentWriter (optional). When set and a
+            content_fn / partial_fn yields bytes, those bytes are
+            pointer-ized (T5) and the pointer is recorded in the audit
+            payload under "pointer".
+        event_type: Caller-declared audit event_type (caller vocabulary).
+        task_id / parent_task_id / execution_id: Opaque labels (all optional).
+            Absent labels degrade the client to pure call governance; present
+            labels attach the call to the orchestration lineage.
+        scope: Optional AuditEvent.scope passthrough.
+        content_type: content_type recorded when pointer-izing bytes.
+
+    Usage:
+        client = GovernedCallClient(governor, "res", handler=do_work,
+                                    audit_writer=audit, event_type="work_call",
+                                    task_id=task_id)
+        result = await client.call(call_id="c-1")
+    """
+
+    def __init__(
+        self,
+        governor: ResourceGovernorProtocol,
+        resource: str,
+        handler: Handler | None = None,
+        *,
+        timeout: float = 30.0,
+        budget: Any = None,
+        cost_fn: Callable | None = None,
+        audit_writer: Any = None,
+        content_writer: Any = None,
+        event_type: str = "",
+        task_id: str | None = None,
+        parent_task_id: str | None = None,
+        execution_id: str | None = None,
+        scope: str | None = None,
+        content_type: str | None = None,
+    ):
+        self.governor = governor
+        self.resource = resource
+        self.timeout = timeout
+        self.handler = handler
+        self._budget = budget
+        self._cost_fn = cost_fn or (lambda result: 1)
+        self._audit_writer = audit_writer
+        self._content_writer = content_writer
+        self._event_type = event_type
+        self._task_id = task_id
+        self._parent_task_id = parent_task_id
+        self._execution_id = execution_id
+        self._scope = scope
+        self._content_type = content_type
+        # Governance half, reused unchanged (its constructor validates
+        # governor / resource for us).
+        self._governed = GovernedClient(
+            governor,
+            resource,
+            handler,
+            timeout=timeout,
+            budget=budget,
+            cost_fn=self._cost_fn,
+        )
+
+    # ---------- non-streaming ----------
+
+    async def call(
+        self,
+        *args,
+        payload_fn: PayloadFn | None = None,
+        content_fn: ContentFn | None = None,
+        cancel_token: Any = None,
+        handler: Handler | None = None,
+        call_id: str | None = None,
+        **kwargs,
+    ) -> Any:
+        """One governed non-streaming call with observation.
+
+        Returns the handler result. Raises whatever governance / execution
+        raised (budget exhaustion, acquire timeout, handler error); an audit
+        record is written for every attempt that passed the budget pre-check.
+        Calls skipped before acquire due to cancellation leave no record.
+        """
+        fn = handler or self.handler
+        if fn is None:
+            raise ValueError(
+                f"GovernedCallClient.call requires a handler "
+                f"(resource={self.resource!r})"
+            )
+        cid = call_id or f"call-{uuid.uuid4().hex[:12]}"
+        started = time.monotonic()
+        executed = False
+
+        async def wrapped(*a, **kw):
+            nonlocal executed
+            executed = True
+            return await fn(*a, **kw)
+
+        result: Any = None
+        error: BaseException | None = None
+        cancelled = False
+        try:
+            result = await self._governed.call(
+                *args,
+                cancel_token=cancel_token,
+                handler=wrapped,
+                call_id=cid,
+                **kwargs,
+            )
+            # When the underlying client skipped execution before acquire
+            # (cancelled), no call happened -> no audit record.
+            return result
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        except BaseException as e:
+            error = e
+            raise
+        finally:
+            if executed or error is not None or cancelled:
+                await self._finalize(
+                    cid,
+                    ok=error is None and not cancelled,
+                    result=result,
+                    error=error,
+                    cancelled=cancelled,
+                    elapsed=time.monotonic() - started,
+                    payload_fn=payload_fn,
+                    content_fn=content_fn,
+                )
+
+    # ---------- streaming ----------
+
+    async def call_streaming(
+        self,
+        *args,
+        handler: Callable[..., AsyncIterator] | None = None,
+        payload_fn: PayloadFn | None = None,
+        result_fn: ResultFn | None = None,
+        partial_fn: PartialFn | None = None,
+        cancel_token: Any = None,
+        call_id: str | None = None,
+        **kwargs,
+    ) -> AsyncIterator[Any]:
+        """One governed streaming call as an async generator.
+
+        Semantics (streaming-governance spec):
+        - The semaphore is held for the stream's whole lifetime and released
+          (shielded) when the stream closes.
+        - Exactly one audit event is written when the stream closes (ok /
+          error / cancelled); deltas are output-plane traffic, never ledger
+          rows.
+        - cost_fn is evaluated at stream end over result_fn() (possibly None
+          when the source reports no usage — the business prices it);
+          charging happens only on normal completion, mirroring call().
+        - On cancellation (caller break / aclose / task cancel), partial_fn()
+          bytes are pointer-ized and the audit record is marked cancelled.
+
+        Note: as an async generator, validation and the governance prologue
+        run on first iteration, not at call time.
+        """
+        fn = handler or self.handler
+        if fn is None:
+            raise ValueError(
+                f"GovernedCallClient.call_streaming requires a handler "
+                f"(resource={self.resource!r})"
+            )
+        cid = call_id or f"call-{uuid.uuid4().hex[:12]}"
+
+        # Budget pre-check before acquire: blocked attempts leave no record.
+        if self._budget is not None:
+            await self._budget.check()
+
+        if cancel_token is not None and await cancel_token.is_cancelled():
+            return
+
+        token = await self.governor.acquire(self.resource, timeout=self.timeout)
+        started = time.monotonic()
+        ok = False
+        cancelled = False
+        error: BaseException | None = None
+        result: Any = None
+        try:
+            async for chunk in fn(*args, **kwargs):
+                yield chunk
+            if result_fn is not None:
+                result = result_fn()
+            if self._budget is not None:
+                await self._budget.charge(self._cost_fn(result), call_id=cid)
+            ok = True
+        except GeneratorExit:
+            # Consumer broke out early / aclose(): cancelled stream.
+            cancelled = True
+            raise
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        except BaseException as e:
+            error = e
+            raise
+        finally:
+            pointer_data: bytes | None = None
+            if cancelled and partial_fn is not None:
+                try:
+                    pointer_data = partial_fn()
+                except Exception as e:
+                    logger.warning(
+                        f"partial_fn failed (audit continues): {e}"
+                    )
+            await self._finalize(
+                cid,
+                ok=ok,
+                result=result,
+                error=error,
+                cancelled=cancelled,
+                elapsed=time.monotonic() - started,
+                payload_fn=payload_fn,
+                pointer_data=pointer_data,
+            )
+            try:
+                await asyncio.shield(self.governor.release(self.resource, token))
+            except RuntimeError:
+                logger.warning(
+                    "release skipped: no running event loop (teardown phase)"
+                )
+
+    # ---------- observation half (T9: never blocks the call path) ----------
+
+    async def _finalize(
+        self,
+        call_id: str,
+        *,
+        ok: bool,
+        result: Any,
+        error: BaseException | None,
+        cancelled: bool,
+        elapsed: float,
+        payload_fn: PayloadFn | None = None,
+        content_fn: ContentFn | None = None,
+        pointer_data: bytes | None = None,
+    ) -> None:
+        """Pointer-ize content, then write one audit event."""
+        payload: dict[str, Any] = {}
+        if ok and payload_fn is not None:
+            try:
+                payload.update(payload_fn(result) or {})
+            except Exception as e:
+                logger.warning(f"payload_fn failed (audit continues): {e}")
+        if error is not None:
+            payload["error"] = str(error)
+        if cancelled:
+            payload["cancelled"] = True
+        payload["elapsed_ms"] = int(elapsed * 1000)
+        if self._parent_task_id is not None:
+            payload["parent_task_id"] = self._parent_task_id
+        if self._execution_id is not None:
+            payload["execution_id"] = self._execution_id
+
+        if pointer_data is None and ok and content_fn is not None:
+            try:
+                pointer_data = content_fn(result)
+            except Exception as e:
+                logger.warning(f"content_fn failed (audit continues): {e}")
+                pointer_data = None
+        pointer_payload = await self._maybe_pointerize(pointer_data)
+        if pointer_payload is not None:
+            payload["pointer"] = pointer_payload
+
+        await self._write_audit(call_id, payload)
+
+    async def _maybe_pointerize(self, data: bytes | None) -> dict | None:
+        if data is None or self._content_writer is None:
+            return None
+        try:
+            pointer = await self._content_writer.put(
+                data, content_type=self._content_type
+            )
+            return pointer.to_payload()
+        except Exception as e:
+            logger.warning(f"content pointer-ize failed (audit continues): {e}")
+            return None
+
+    async def _write_audit(self, call_id: str, payload: dict) -> None:
+        if self._audit_writer is None:
+            return
+        try:
+            await self._audit_writer.append(
+                AuditEvent(
+                    event_id=call_id,
+                    task_id=self._task_id or "",
+                    scope=self._scope,
+                    event_type=self._event_type,
+                    payload=payload,
+                )
+            )
+        except Exception as e:
+            logger.warning(f"audit append failed (call unaffected): {e}")

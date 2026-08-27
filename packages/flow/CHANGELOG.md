@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+
+## [0.1.3] - TBD
+
+### Added
+- **GovernedCallClient** (`orditect.flow.governor.call`): standard form of
+  one governed call, composing GovernedClient (governance half) with
+  observation (audit + content pointer-ization) and three opaque labels
+  (task_id / parent_task_id / execution_id). Extension, not reinvention.
+- **call_id dual-habitat idempotency**: hot path (quota already_reserved)
+  and cold path (audit event_id) now share the same call_id — retry with
+  the same call_id dedups at both layers.
+- **ActionDispatcher** (`orditect.flow.actions`): flow-side asynchronous
+  executor for action commands (pause/retry/resume), consuming from an
+  action queue and delegating to flow's public operation surface
+  (orchestrator cancel / RecoveryService rerun/resume). Command-queue form
+  per DD-013.
+
+### Changed
+- Dependency floor raised: orditect-protocol>=0.1.3 (imports remain compatible).
+
 ## [0.1.2] - TBD
 
 ### Changed

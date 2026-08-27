@@ -87,6 +87,9 @@ def _classify_import(dotted: str, stdlib: frozenset[str]) -> tuple[str, str]:
         if len(parts) >= 2 and parts[1] == "adapter":
             # orditect.adapter.<name> is a two-level namespace portion
             target = ".".join(parts[:3])
+        elif len(parts) >= 2 and parts[1] == "bridge":
+            # orditect.bridge.<name> is a two-level namespace portion
+            target = ".".join(parts[:3])
         else:
             target = ".".join(parts[:2])
         return "internal", target
