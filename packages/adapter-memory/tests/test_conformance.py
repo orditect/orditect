@@ -27,3 +27,7 @@ class TestMemoryConformance:
     def test_snapshot_part(self):
         report = run_conformance(MemoryStore().snapshot)
         assert report.failed == 0, report.summary()
+
+    def test_dependency_part(self):
+        report = run_conformance(MemoryStore().dependency)
+        assert report.failed == 0, report.summary()

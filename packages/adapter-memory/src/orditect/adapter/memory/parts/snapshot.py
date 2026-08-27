@@ -13,6 +13,7 @@ from typing import Any
 
 from orditect.protocol import (
     CapabilitySet,
+    InvalidQueryError,
     Page,
     Sort,
     SortDirection,
@@ -20,6 +21,7 @@ from orditect.protocol import (
     TerminalStateViolationError,
     TimeRange,
 )
+from orditect.protocol.mechanism import GROUP_BY_FIELDS, SORT_FIELDS
 
 _MAX_TRAVERSAL_DEPTH = 32  # contract-termed traversal bound
 
@@ -98,8 +100,13 @@ class MemorySnapshotPart:
             if t == task_id and st == step and self._alive(s)
         ]
         sort = sort or Sort()
+        if sort.field not in SORT_FIELDS["snapshot"]:
+            raise InvalidQueryError(
+                f"sort.field {sort.field!r} outside the snapshot mechanism "
+                f"whitelist: {sorted(SORT_FIELDS['snapshot'])}"
+            )
         rows.sort(
-            key=lambda s: getattr(s, sort.field, s.created_at),
+            key=lambda s: getattr(s, sort.field),
             reverse=sort.direction is SortDirection.DESC,
         )
         page = page or Page()
@@ -215,8 +222,13 @@ class MemorySnapshotPart:
             if time_range.end is not None:
                 rows = [s for s in rows if s.created_at < time_range.end]
         sort = sort or Sort()
+        if sort.field not in SORT_FIELDS["snapshot"]:
+            raise InvalidQueryError(
+                f"sort.field {sort.field!r} outside the snapshot mechanism "
+                f"whitelist: {sorted(SORT_FIELDS['snapshot'])}"
+            )
         rows.sort(
-            key=lambda s: getattr(s, sort.field, s.created_at),
+            key=lambda s: getattr(s, sort.field),
             reverse=sort.direction is SortDirection.DESC,
         )
         page = page or Page()
@@ -229,6 +241,11 @@ class MemorySnapshotPart:
         parent_task_id: str | None = None,
         time_range: TimeRange | None = None,
     ) -> dict[str, Any]:
+        if group_by not in GROUP_BY_FIELDS["snapshot"]:
+            raise InvalidQueryError(
+                f"group_by {group_by!r} outside the snapshot mechanism "
+                f"whitelist: {sorted(GROUP_BY_FIELDS['snapshot'])}"
+            )
         rows = self._latest_per_node([s for s in self._snaps.values() if self._alive(s)])
         if parent_task_id is not None:
             rows = [s for s in rows if s.parent_task_id == parent_task_id]

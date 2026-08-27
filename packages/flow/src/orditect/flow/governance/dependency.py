@@ -19,7 +19,11 @@ from typing import Any
 
 from orditect.flow.exceptions import TaskNotFoundError
 from orditect.flow.protocols.storage import TaskStorageProtocol
-from orditect.protocol import AuditEvent, UnsupportedCapabilityError
+from orditect.protocol import (
+    AuditEvent,
+    DependencyEdge,
+    UnsupportedCapabilityError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +57,9 @@ class DependencyGovernor:
         audit_writer: optional protocol AuditWriter (T9: write failures
             are logged, never raised).
         dep_graph_store: optional cold-path dependency graph store
-            (duck-typed: write_dependency / read_graph / all_edges).
-            Not injected: the hot path works fully and
-            get_dependency_graph raises UnsupportedCapabilityError (T8).
+            (protocol DependencyWriter/DependencyReader: write_dependency /
+            read_graph / all_edges). Not injected: the hot path works fully
+            and get_dependency_graph raises UnsupportedCapabilityError (T8).
     """
 
     def __init__(
@@ -111,12 +115,12 @@ class DependencyGovernor:
 
     # ---------- dependency graph query ----------
 
-    async def get_dependency_graph(self, root_id: str) -> dict:
+    async def get_dependency_graph(self, root_id: str) -> Any:
         """Query the full dependency graph (cold path, never touches Redis).
 
         Returns:
-            {"nodes": [...], "edges": [...]} as produced by the injected
-            dep_graph_store.
+            DependencyGraph (pure-edge neighbourhood, T12). Callers needing a
+            JSON form use .to_payload().
 
         Raises:
             UnsupportedCapabilityError: dep_graph_store not injected (T8).
@@ -242,7 +246,11 @@ class DependencyGovernor:
             for pid in parents:
                 try:
                     await self._dep_graph_store.write_dependency(
-                        child_id, pid, pid == primary
+                        DependencyEdge(
+                            child_id=child_id,
+                            parent_id=pid,
+                            is_primary=(pid == primary),
+                        )
                     )
                 except Exception as e:
                     logger.error(

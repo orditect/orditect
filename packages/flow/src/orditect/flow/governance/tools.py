@@ -22,10 +22,10 @@ async def scan_dependency_cycles(dep_graph_store: Any) -> list[list[str]]:
     edges = await dep_graph_store.all_edges()
     children: dict[str, list[str]] = {}
     nodes: set[str] = set()
-    for child_id, parent_id in edges:
-        children.setdefault(child_id, []).append(parent_id)
-        nodes.add(child_id)
-        nodes.add(parent_id)
+    for edge in edges:
+        children.setdefault(edge.child_id, []).append(edge.parent_id)
+        nodes.add(edge.child_id)
+        nodes.add(edge.parent_id)
 
     cycles: list[list[str]] = []
     seen_cycles: set[tuple[str, ...]] = set()
@@ -68,8 +68,8 @@ async def rebuild_dep_counters(storage: Any, dep_graph_store: Any) -> dict[str, 
     """
     edges = await dep_graph_store.all_edges()
     parents_of: dict[str, list[str]] = {}
-    for child_id, parent_id in edges:
-        parents_of.setdefault(child_id, []).append(parent_id)
+    for edge in edges:
+        parents_of.setdefault(edge.child_id, []).append(edge.parent_id)
 
     stats = {"rebuilt": 0, "skipped": 0, "errors": 0}
     for child_id, parents in parents_of.items():

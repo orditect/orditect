@@ -16,6 +16,7 @@ from orditect.flow.storage.factory import (
 )
 
 from orditect.flow.governance import DependencyGovernor
+from orditect.protocol import DependencyEdge, DependencyGraph
 
 REDIS_URL = "redis://localhost:6379/15"
 
@@ -52,23 +53,31 @@ class _Lifecycle:
 
 class _DepGraphStore:
     def __init__(self) -> None:
-        self.edges: list[tuple[str, str, bool]] = []
+        self._edges: dict[tuple[str, str], DependencyEdge] = {}
 
-    async def write_dependency(self, child_id: str, parent_id: str, is_primary: bool) -> None:
-        self.edges.append((child_id, parent_id, is_primary))
+    async def write_dependency(self, edge: DependencyEdge) -> None:
+        self._edges[(edge.child_id, edge.parent_id)] = edge
 
-    async def read_graph(self, root_id: str) -> dict:
-        nodes = {}
-        for child, parent, _ in self.edges:
-            nodes.setdefault(child, []).append(parent)
-            nodes.setdefault(parent, [])
-        return {
-            "nodes": [{"task_id": t, "parents": p} for t, p in nodes.items()],
-            "edges": [{"from": c, "to": p, "is_primary": pr} for c, p, pr in self.edges],
-        }
+    async def read_graph(self, root_id: str) -> DependencyGraph:
+        from collections import deque
+        adjacency: dict[str, set[str]] = {}
+        for child_id, parent_id in self._edges:
+            adjacency.setdefault(child_id, set()).add(parent_id)
+            adjacency.setdefault(parent_id, set()).add(child_id)
+        visited = {root_id}
+        queue: deque[str] = deque([root_id])
+        while queue:
+            node = queue.popleft()
+            for nxt in adjacency.get(node, ()):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    queue.append(nxt)
+        edges = [e for e in self._edges.values() if e.child_id in visited]
+        return DependencyGraph(root_task_id=root_id,
+                               task_ids=sorted(visited), edges=edges)
 
-    async def all_edges(self) -> list[tuple[str, str]]:
-        return [(c, p) for c, p, _ in self.edges]
+    async def all_edges(self) -> list[DependencyEdge]:
+        return list(self._edges.values())
 
 
 def _gov(storage, lifecycle=None, store=None) -> DependencyGovernor:
@@ -103,9 +112,9 @@ async def test_e2e_three_parent_readiness_and_dag_query(storage):
 
     # cold-path graph query
     graph = await gov.get_dependency_graph("c")
-    assert len(graph["edges"]) == 3
-    primaries = [e for e in graph["edges"] if e["is_primary"]]
-    assert len(primaries) == 1 and primaries[0]["to"] == "p1"
+    assert len(graph.edges) == 3
+    primaries = [e for e in graph.edges if e.is_primary]
+    assert len(primaries) == 1 and primaries[0].parent_id == "p1"
 
 
 async def test_e2e_failed_parent_cascades_cancel(storage):

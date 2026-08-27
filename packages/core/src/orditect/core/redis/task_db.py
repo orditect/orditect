@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import copy
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Iterable, Optional
 
 import redis.asyncio as aioredis
@@ -237,7 +237,8 @@ Raises:
 
     @staticmethod
     def _now_str() -> str:
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        """UTC-aware ISO timestamp (T7: mechanism-internal hot-record field)."""
+        return datetime.now(UTC).isoformat()
 
     def _can_transfer(self, from_status: str, to_status: str) -> bool:
         """Instance-level transfer validation (transitions injected takes priority, otherwise built-in default table)."""

@@ -1,0 +1,1 @@
+"""Orditect CI gate scripts (stdlib-only, runnable without installing anything)."""

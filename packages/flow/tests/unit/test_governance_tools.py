@@ -14,22 +14,24 @@ from orditect.flow.governance import (
 from orditect.flow.recovery.service import RecoveryService
 
 from fake_infra import FakeGovernanceStorage
+from fake_infra import FakeDepGraphStore, FakeGovernanceStorage
+from orditect.protocol import DependencyEdge
 
 pytestmark = pytest.mark.unit
 
 
-class FakeDepGraphStore:
-    def __init__(self) -> None:
-        self.edges: list[tuple[str, str, bool]] = []
-
-    async def write_dependency(self, child_id: str, parent_id: str, is_primary: bool) -> None:
-        self.edges.append((child_id, parent_id, is_primary))
-
-    async def read_graph(self, root_id: str) -> dict:
-        return {"nodes": [], "edges": []}
-
-    async def all_edges(self) -> list[tuple[str, str]]:
-        return [(c, p) for c, p, _ in self.edges]
+# class FakeDepGraphStore:
+#     def __init__(self) -> None:
+#         self.edges: list[tuple[str, str, bool]] = []
+#
+#     async def write_dependency(self, child_id: str, parent_id: str, is_primary: bool) -> None:
+#         self.edges.append((child_id, parent_id, is_primary))
+#
+#     async def read_graph(self, root_id: str) -> dict:
+#         return {"nodes": [], "edges": []}
+#
+#     async def all_edges(self) -> list[tuple[str, str]]:
+#         return [(c, p) for c, p, _ in self.edges]
 
 
 def _gov(storage, **kwargs) -> DependencyGovernor:
@@ -39,24 +41,24 @@ def _gov(storage, **kwargs) -> DependencyGovernor:
 
 # ---------- scan_dependency_cycles ----------
 
-
 async def test_scan_acyclic_graph_clean():
     store = FakeDepGraphStore()
-    store.edges.extend([("a", "b", True), ("b", "c", True), ("a", "d", False)])
+    await store.write_dependency(DependencyEdge(child_id="a", parent_id="b", is_primary=True))
+    await store.write_dependency(DependencyEdge(child_id="b", parent_id="c", is_primary=True))
+    await store.write_dependency(DependencyEdge(child_id="a", parent_id="d", is_primary=False))
     assert await scan_dependency_cycles(store) == []
-
 
 async def test_scan_detects_simple_cycle():
     store = FakeDepGraphStore()
-    store.edges.extend([("a", "b", True), ("b", "a", True)])
+    await store.write_dependency(DependencyEdge(child_id="a", parent_id="b", is_primary=True))
+    await store.write_dependency(DependencyEdge(child_id="b", parent_id="a", is_primary=True))
     cycles = await scan_dependency_cycles(store)
     assert len(cycles) == 1
     assert set(cycles[0]) == {"a", "b"}
 
-
 async def test_scan_detects_self_loop():
     store = FakeDepGraphStore()
-    store.edges.append(("a", "a", True))
+    await store.write_dependency(DependencyEdge(child_id="a", parent_id="a", is_primary=True))
     cycles = await scan_dependency_cycles(store)
     assert len(cycles) == 1
     assert cycles[0][0] == "a"
@@ -71,7 +73,10 @@ async def test_rebuild_recomputes_counters_and_votes():
     for tid, st in [("p1", "running"), ("p2", "failed"),
                     ("p3", "succeeded"), ("c", "pending")]:
         await storage.initialize_task(tid, st)
-    store.edges.extend([("c", "p1", True), ("c", "p2", False), ("c", "p3", False)])
+    # ✅ 通过 write_dependency 写入 DependencyEdge 对象
+    await store.write_dependency(DependencyEdge(child_id="c", parent_id="p1", is_primary=True))
+    await store.write_dependency(DependencyEdge(child_id="c", parent_id="p2", is_primary=False))
+    await store.write_dependency(DependencyEdge(child_id="c", parent_id="p3", is_primary=False))
 
     stats = await rebuild_dep_counters(storage, store)
 
@@ -86,7 +91,9 @@ async def test_rebuild_recomputes_counters_and_votes():
 async def test_rebuild_skips_missing_hot_records():
     storage = FakeGovernanceStorage()
     store = FakeDepGraphStore()
-    store.edges.append(("ghost-child", "ghost-parent", True))
+    await store.write_dependency(
+        DependencyEdge(child_id="ghost-child", parent_id="ghost-parent", is_primary=True)
+    )
 
     stats = await rebuild_dep_counters(storage, store)
     assert stats["skipped"] == 1

@@ -11,19 +11,19 @@ In-memory reference implementation of the
 
 ## Structure
 
-`MemoryStore` composes four per-domain parts, each implementing one
+`MemoryStore` composes five per-domain parts, each implementing one
 protocol pair:
 
     store = MemoryStore()
-    store.content    # ContentWriter + ContentReader
-    store.audit      # AuditWriter + AuditReader
-    store.result     # ResultWriter + ResultReader
-    store.snapshot   # SnapshotWriter + SnapshotReader
+    store.content     # ContentWriter + ContentReader
+    store.audit       # AuditWriter + AuditReader
+    store.result      # ResultWriter + ResultReader
+    store.snapshot    # SnapshotWriter + SnapshotReader
+    store.dependency  # DependencyWriter + DependencyReader
 
 Frameworks consume the part they need; each part exposes its own
 `capabilities` property. This per-domain-part structure is the recommended
 shape for production adapters (avoids method-name collisions across domains).
-
 ## Scope
 
 Single-process, non-durable. No cross-process consistency, no persistence.
