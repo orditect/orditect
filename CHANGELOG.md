@@ -142,6 +142,18 @@ interchangeable.
 - UI interaction: ✅ (adapter-ui)
 - Relational backend: ❌ (PG, commercial layer)
 
+### Documentation
+- `docs/integration-guide.md`: three-category integration guide with
+  certification checklist and boundary discipline.
+
+### Explicitly Not Done
+- No concrete adapter/bridge productization (reference implementations only).
+- No new governance mechanisms (all reuse existing core/flow assets).
+- No business concepts in framework layers (OpenAI vocabulary stays in bridge).
+- No UI frontend implementation (that's product layer).
+- No apps / gateways / knowledge packs / clients / SDKs (outside framework).
+- No framework graph-structure mapping spec (deferred to optional layer 2).
+- No SaaS / hosted services.
 
 ## [0.1.2] - 2026-08-28
 
