@@ -45,7 +45,23 @@ async def test_decr_missing_key_returns_negative(db):
     # fault-tolerance contract: DECR on a missing key yields -1, no exception
     assert await db.decr_remaining_deps("ghost") == -1
 
+async def test_decr_ghost_counter_gets_ttl_fallback(db, redis_client):
+    """v0.1.4: a ghost counter created by DECR on a missing key must still
+    carry a TTL (fallback to default expiry) even when the hot record is
+    gone — never an eternal ghost key."""
+    await db.client.delete("task:ghost2")
+    await db.decr_remaining_deps("ghost2")
+    ttl = await db.client.ttl("task:ghost2:remaining_deps")
+    assert ttl > 0, "ghost counter key must not be eternal"
 
+# async def test_decr_ghost_counter_gets_ttl_fallback(db):
+#     """v0.1.4: a ghost counter created by DECR on a missing key must still
+#     carry a TTL (fallback to default expiry) even when the hot record is
+#     gone — never an eternal ghost key."""
+#     await db.client.delete("task:ghost2")
+#     await db.decr_remaining_deps("ghost2")
+#     ttl = await db.client.ttl("task:ghost2:remaining_deps")
+#     assert ttl > 0, "ghost counter key must not be eternal"
 # ----- TTL discipline -----
 
 

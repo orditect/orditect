@@ -62,34 +62,6 @@ async def sort_field_outside_whitelist_rejected(adapter: Any) -> None:
     raise AssertionError("expected InvalidQueryError, got success")
 
 
-@case("CF-SNP-011")
-async def sort_field_outside_whitelist_rejected(adapter: Any) -> None:
-    """CF-SNP-011 (T6): an out-of-whitelist sort.field raises InvalidQueryError."""
-    if not adapter.capabilities.supports("snapshot_query"):
-        return
-    from orditect.protocol.errors import InvalidQueryError
-    from orditect.protocol.models import Sort
-
-    try:
-        await adapter.query(sort=Sort(field="cost"))
-    except InvalidQueryError:
-        return
-    raise AssertionError("expected InvalidQueryError, got success")
-
-
-@case("CF-SNP-012")
-async def group_by_outside_whitelist_rejected(adapter: Any) -> None:
-    """CF-SNP-012 (T6): an out-of-whitelist group_by raises InvalidQueryError."""
-    if not adapter.capabilities.supports("snapshot_query"):
-        return
-    from orditect.protocol.errors import InvalidQueryError
-
-    try:
-        await adapter.aggregate(group_by="cost")
-    except InvalidQueryError:
-        return
-    raise AssertionError("expected InvalidQueryError, got success")
-
 @case("CF-AUD-003")
 async def page_boundaries(adapter: Any) -> None:
     """CF-AUD-003 (T6): offset beyond the result set -> empty; limit=1 pages correctly."""

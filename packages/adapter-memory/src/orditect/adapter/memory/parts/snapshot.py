@@ -21,7 +21,11 @@ from orditect.protocol import (
     TerminalStateViolationError,
     TimeRange,
 )
-from orditect.protocol.mechanism import GROUP_BY_FIELDS, SORT_FIELDS
+from orditect.protocol.mechanism import (
+    GROUP_BY_FIELDS,
+    SORT_FIELDS,
+    idempotent_payload_equal,
+)
 
 _MAX_TRAVERSAL_DEPTH = 32  # contract-termed traversal bound
 
@@ -45,22 +49,44 @@ class MemorySnapshotPart:
             key = (snapshot.task_id, snapshot.step, snapshot.execution_id)
             existing = self._snaps.get(key)
             if key in self._terminal:
-                # T3: within a terminal generation, state mutation is rejected;
-                # non-state fields may still merge to complete the record.
                 if existing is not None and snapshot.status != existing.status:
                     raise TerminalStateViolationError(
                         f"state mutation within terminal generation: {key}"
                     )
+            if existing is not None:
+                updates: dict = {
+                    f: getattr(snapshot, f)
+                    for f in (
+                        "parent_task_id", "input_pointer", "output_pointer",
+                        "error", "cost", "model", "expire_at",
+                    )
+                    if getattr(snapshot, f) is not None
+                }
+                # Status advances only when the incoming snapshot carries a
+                # non-empty status (state never regresses to empty).
+                if snapshot.status:
+                    updates["status"] = snapshot.status
+                updates["updated_at"] = snapshot.updated_at
+                merged = existing.model_copy(update=updates)
+                self._snaps[key] = merged
+                return
             self._snaps[key] = snapshot
 
     async def save_terminal(self, snapshot: TaskSnapshot) -> None:
         async with self._lock:
             key = (snapshot.task_id, snapshot.step, snapshot.execution_id)
             existing = self._snaps.get(key)
-            if key in self._terminal and existing is not None and existing != snapshot:
-                raise TerminalStateViolationError(
-                    f"conflicting re-save of terminal generation: {key}"
-                )
+            if key in self._terminal and existing is not None:
+                # T4: re-saving a terminal generation with identical business
+                # content (mechanism clock fields excluded) is a silent dedup;
+                # differing content is a conflict (T3).
+                if not idempotent_payload_equal(
+                    existing.model_dump(), snapshot.model_dump()
+                ):
+                    raise TerminalStateViolationError(
+                        f"conflicting re-save of terminal generation: {key}"
+                    )
+                return
             self._snaps[key] = snapshot
             self._terminal.add(key)
 

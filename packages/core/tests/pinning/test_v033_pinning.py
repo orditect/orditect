@@ -293,6 +293,68 @@ class TestB2QuotaIdempotentRenewal:
         )
         await db.close()
 
+    async def test_idempotent_renewal_chain_keeps_pending_alive(self, redis_url):
+        """v0.1.4: an idempotent renewal chain (>= 2 renewals, each within
+        task_ttl) must keep pending_key alive for at least as long as the
+        renewed lease — otherwise the live lease's units evaporate from the
+        counter and a later reserve over-admits."""
+        db = AdmissionQuotaRedisDB(redis_url)
+        await db.connect()
+
+        await db.reserve_units(
+            scope="chain", task_id="t1", units=5,
+            max_units=100, task_ttl_sec=2,
+        )
+        # leases_ttl = 4s. Two renewals spaced < task_ttl apart push the
+        # lease's logical lifetime past the initial pending TTL.
+        await asyncio.sleep(1.5)
+        r = await db.reserve_units(
+            scope="chain", task_id="t1", units=5,
+            max_units=100, task_ttl_sec=2,
+        )
+        assert r["reason"] == "already_reserved"
+        await asyncio.sleep(1.5)
+        r = await db.reserve_units(
+            scope="chain", task_id="t1", units=5,
+            max_units=100, task_ttl_sec=2,
+        )
+        assert r["reason"] == "already_reserved"
+
+        # ~4.7s since first reserve (> leases_ttl=4s), but only 1.7s since
+        # the last renewal (< task_ttl=2s, so the lease is still alive).
+        await asyncio.sleep(1.7)
+
+        # Pre-fix: pending_key already expired -> 0; post-fix: lease alive -> 5
+        assert await db.get_pending_units(scope="chain") == 5
+
+        # Over-allocation guard: t1's 5 units must still be counted.
+        r2 = await db.reserve_units(
+            scope="chain", task_id="t2", units=96,
+            max_units=100, task_ttl_sec=2,
+        )
+        assert r2["ok"] is False and r2["reason"] == "limit_exceeded"
+        await db.close()
+
+@pytest.mark.pinning
+class TestQuotaReleaseResidue:
+    """v0.1.4: releasing to zero must not leave an eternal '0' pending key."""
+
+    async def test_release_to_zero_deletes_key_when_no_ttl(self, redis_url, redis_client):
+        db = AdmissionQuotaRedisDB(redis_url)
+        await db.connect()
+
+        await db.reserve_units(
+            scope="rel_zero", task_id="t1", units=5,
+            max_units=10, task_ttl_sec=100,
+        )
+        await db.release_units(scope="rel_zero", task_id="t1")
+
+        # Key must either be gone or carry a TTL — never an eternal "0".
+        exists = await redis_client.exists("admission:rel_zero:pending_units")
+        if exists:
+            ttl = await redis_client.ttl("admission:rel_zero:pending_units")
+            assert ttl > 0, "zero pending key must not be eternal"
+        await db.close()
 
 @pytest.mark.pinning
 class TestB3PoolHealthCheck:

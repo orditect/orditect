@@ -11,7 +11,7 @@ cleanup, and that OpenAI-shaped vocabulary stays at the bridge edge
 from __future__ import annotations
 
 import json
-
+import asyncio
 import httpx
 import pytest
 
@@ -79,6 +79,17 @@ def _make_client(handler, store, **kwargs):
     defaults.update(kwargs)
     return GovernedLLMClient("http://test", **defaults)
 
+async def _drain_stream(stream):
+    """Consume a stream generator to completion AND let its finally blocks
+    (budget charge + audit write) settle on the next event-loop tick."""
+    chunks = []
+    async for chunk in stream:
+        chunks.append(chunk)
+    # Yield control so the generator's finally chain (which runs on the
+    # next tick after the async-for exits) completes.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    return chunks
 
 class TestNonStreaming:
     async def test_chat_governed_and_audited(self):
@@ -117,6 +128,7 @@ class TestNonStreaming:
 
 
 class TestStreaming:
+
     async def test_stream_yields_source_chunks_and_charges_at_end(self):
         async def handler(request: httpx.Request) -> httpx.Response:
             lines = [
@@ -142,11 +154,9 @@ class TestStreaming:
             return (result or {}).get("usage", {}).get("total_tokens", 0)
 
         client = _make_client(handler, store, cost_fn=cost_fn)
-        chunks: list[SourceChunk] = []
-        async for chunk in client.stream(
-            messages=[{"role": "user", "content": "hi"}]
-        ):
-            chunks.append(chunk)
+        chunks = await _drain_stream(
+            client.stream(messages=[{"role": "user", "content": "hi"}])
+        )
 
         texts = [c.text for c in chunks if c.text]
         assert texts == ["he", "llo"]
@@ -174,8 +184,9 @@ class TestStreaming:
         client = _make_client(
             handler, store, cost_fn=lambda r: seen.append(r) or 3
         )
-        async for _ in client.stream(messages=[{"role": "user", "content": "hi"}]):
-            pass
+        await _drain_stream(
+            client.stream(messages=[{"role": "user", "content": "hi"}])
+        )
 
         # A5: no usage in the stream -> cost_fn receives None; business prices it.
         assert seen == [None]
@@ -194,10 +205,16 @@ class TestStreaming:
         store = MemoryStore()
         client = _make_client(handler, store)
         count = 0
-        async for _ in client.stream(messages=[{"role": "user", "content": "hi"}]):
+        stream = client.stream(messages=[{"role": "user", "content": "hi"}])
+        async for _ in stream:
             count += 1
             if count == 2:
                 break
+        # break only suspends the generator; explicitly close it so the
+        # finally chain (partial pointer-ize + audit write) executes.
+        await stream.aclose()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         events = store.audit._events
         assert len(events) == 1

@@ -137,7 +137,8 @@ class GovernedCallClient:
         Returns the handler result. Raises whatever governance / execution
         raised (budget exhaustion, acquire timeout, handler error); an audit
         record is written for every attempt that passed the budget pre-check.
-        Calls skipped before acquire due to cancellation leave no record.
+        Calls blocked by budget exhaustion or cancelled before acquire leave
+        no audit record.
         """
         fn = handler or self.handler
         if fn is None:
@@ -146,6 +147,16 @@ class GovernedCallClient:
                 f"(resource={self.resource!r})"
             )
         cid = call_id or f"call-{uuid.uuid4().hex[:12]}"
+
+        # Budget pre-check happens BEFORE entering the audited region: a
+        # blocked attempt never reached the resource and must not produce an
+        # audit record (T9 observation fidelity).
+        if self._budget is not None:
+            await self._budget.check()
+
+        if cancel_token is not None and await cancel_token.is_cancelled():
+            return None
+
         started = time.monotonic()
         executed = False
 
@@ -165,8 +176,6 @@ class GovernedCallClient:
                 call_id=cid,
                 **kwargs,
             )
-            # When the underlying client skipped execution before acquire
-            # (cancelled), no call happened -> no audit record.
             return result
         except asyncio.CancelledError:
             cancelled = True
@@ -175,6 +184,9 @@ class GovernedCallClient:
             error = e
             raise
         finally:
+            # Note: only attempts that acquired the resource (executed) or
+            # failed mid-execution are audited. Budget blocks and pre-acquire
+            # cancellations are excluded by the early returns above.
             if executed or error is not None or cancelled:
                 await self._finalize(
                     cid,
@@ -243,8 +255,12 @@ class GovernedCallClient:
                 yield chunk
             if result_fn is not None:
                 result = result_fn()
+            # cost_fn is evaluated whenever a result exists (its output feeds
+            # both budget charging AND observation) — it must NOT depend on
+            # budget being present.
+            cost = self._cost_fn(result)
             if self._budget is not None:
-                await self._budget.charge(self._cost_fn(result), call_id=cid)
+                await self._budget.charge(cost, call_id=cid)
             ok = True
         except GeneratorExit:
             # Consumer broke out early / aclose(): cancelled stream.

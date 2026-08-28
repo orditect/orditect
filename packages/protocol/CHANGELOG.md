@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - TBD
+
+### Added
+- `mechanism.idempotent_payload_equal` + `IDEMPOTENCY_EXCLUDED_FIELDS`:
+  T4 idempotency comparison now excludes mechanism clock fields
+  (created_at / updated_at / registered_at — producer-clock values per T7).
+- New conformance case CF-SNP-013 (T3 second face): a sparse
+  same-generation save must not erase previously recorded non-state
+  fields.
+- Meta-pinning test `TestCaseRegistrationIntegrity`: every CF case must
+  be registered under the half-domain its id prefix implies.
+
+### Fixed
+- CF-SNP-011/012 were registered under the wrong half-domain
+  (`audit_sink` instead of `snapshot_sink`) and were skipped on every
+  adapter — sort/group_by whitelist verification never actually ran.
+  Moved to `cases_snapshot.py`.
+- DR-AUD-001: canonical payload now excludes mechanism clock fields, so
+  identical business content with different producer timestamps is a
+  legal dedup, not a violation (FLIP).
+
+### Changed
+- `domains/snapshot.py` `SnapshotWriter.save` docstring: merge rule
+  documented (non-state fields merge to complete the record; status never
+  merges).
+- `docs/terms.md` T4: idempotency comparison excludes mechanism clock
+  fields. Appendix A lists CF-SNP-013.
+
 ## [0.1.3] - TBD
 
 ### Changed

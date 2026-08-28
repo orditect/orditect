@@ -104,12 +104,13 @@ class TaskRedisDB(RedisDB):
         self._terminal_statuses = tuple(terminal_statuses)
         self._transitions = transitions  # None falls back to module-level can_transfer
 
-        # Default fields for task record (used by initialize_task)
+        # Note: no "timestamp" here — it is always set fresh at
+        # initialize_task time (a constructor-time value would be a dead,
+        # misleading default).
         self.default_task_data = {
             "status": "",
             "reason": "",
             "payload": {},
-            "timestamp": self._now_str(),
             "cancel_requested": False,
         }
 
@@ -474,13 +475,18 @@ Raises:
     async def _sync_attached_ttl(self, owner_task_id: str, keys: list[str]) -> None:
         """Best-effort TTL sync: attached keys expire with the owner hot record.
 
+        Fallback (v0.1.4): when the owner hot record is already gone (e.g.
+        TTL=-2), the attached key still gets the default expiry instead of
+        remaining eternal — a ghost counter key created by DECR on a missing
+        key would otherwise never expire.
+
         EXPIRE on a missing key is a harmless no-op (returns 0). Failures are
         logged, never raised — the write itself already succeeded.
         """
         try:
             ttl = await self.client.ttl(self._task_key(owner_task_id))
             if ttl <= 0:
-                return
+                ttl = self.default_expire_time
             async with self.client.pipeline(transaction=False) as pipe:
                 for key in keys:
                     pipe.expire(key, ttl)

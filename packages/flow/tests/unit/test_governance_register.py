@@ -31,23 +31,6 @@ class RecordingAuditWriter:
     async def append(self, event) -> None:
         self.events.append(event)
 
-#
-# class FakeDepGraphStore:
-#     def __init__(self, fail: bool = False) -> None:
-#         self.edges: list[tuple[str, str, bool]] = []
-#         self._fail = fail
-#
-#     async def write_dependency(self, child_id: str, parent_id: str, is_primary: bool) -> None:
-#         if self._fail:
-#             raise RuntimeError("cold store down")
-#         self.edges.append((child_id, parent_id, is_primary))
-#
-#     async def read_graph(self, root_id: str) -> dict:
-#         return {"nodes": [], "edges": []}
-#
-#     async def all_edges(self) -> list[tuple[str, str]]:
-#         return [(c, p) for c, p, _ in self.edges]
-
 
 class MidRegisterFlipStorage(FakeGovernanceStorage):
     """Flips a parent's status the moment the child's hot record is written

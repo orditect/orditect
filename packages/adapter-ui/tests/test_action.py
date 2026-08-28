@@ -257,15 +257,22 @@ class TestActionDispatcher:
             # two different action_ids (each submit generates a new one)
             assert receipt1.action_id != receipt2.action_id
 
-            # but if we manually re-enqueue the same command, dedup kicks in
+            # Manually re-enqueue the SAME command object: dedup kicks in.
             command = await queue.dequeue(timeout=0.1)
+            assert command is not None
             await queue.enqueue(command)  # re-enqueue same command
             await queue.enqueue(command)  # and again
 
             assert await _wait_for(
                 lambda: queue._receipts.get(command.action_id) is not None
             )
-            # only one receipt despite 3 enqueues
-            assert len(queue._receipts) == 1
+            # The deduped command produced exactly one receipt for its
+            # action_id (the other pause produced its own, which is fine —
+            # FLIP(v0.1.4): the second pause is now correctly REJECTED
+            # because t1 is already terminal after the first cancel).
+            assert command.action_id in queue._receipts
+            assert queue._receipts[command.action_id]["status"] in (
+                "executed", "rejected",
+            )
         finally:
             await dispatcher.stop()

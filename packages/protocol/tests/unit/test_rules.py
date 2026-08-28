@@ -95,6 +95,16 @@ class TestAuditRules:
         report = run_rules(lines, select={"DR-AUD-001"})
         assert any(f.rule == "DR-AUD-001" for f in report.findings)
 
+    def test_different_timestamp_same_content_is_dedup(self):
+        """FLIP(v0.1.4): DR-AUD-001 excludes mechanism clock fields —
+        identical business content with different created_at is a legal
+        dedup, not a violation."""
+        a = _audit(payload={"v": 1})
+        b = _audit(payload={"v": 1})
+        b["data"]["created_at"] = "2026-08-28T11:00:00Z"  # different producer clock
+        report = run_rules([a, b], select={"DR-AUD-001"})
+        assert report.ok
+
 
 class TestContentRules:
     def test_resolving_pointer_clean(self):

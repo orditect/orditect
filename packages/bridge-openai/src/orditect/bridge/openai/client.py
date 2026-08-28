@@ -213,7 +213,11 @@ class GovernedLLMClient:
             handler=_gen,
             cancel_token=cancel_token,
             call_id=call_id,
-            result_fn=lambda: result_holder or None,
+            result_fn=lambda: (
+                result_holder
+                if result_holder.get("usage") is not None
+                else None
+            ),
             partial_fn=lambda: "".join(partial).encode("utf-8") or None,
             payload_fn=lambda r: self._audit_payload(r),
         ):

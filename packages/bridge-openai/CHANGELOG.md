@@ -1,5 +1,18 @@
 # orditect-bridge-openai Changelog
 
+## [0.1.4] - TBD
+
+### Fixed
+- `stream()`: `result_fn` now returns the result holder only when usage
+  is actually present; otherwise None (A5: usage-missing streams must
+  hand None to cost_fn so the business prices it — the holder containing
+  only `_latency_ms` no longer masquerades as a result).
+
+### Tests
+- Streaming tests now close the generator explicitly (`aclose()`), so the
+  finally chain (charge + audit write) executes deterministically
+  (previously timing-dependent on generator GC).
+
 ## [0.1.3] - TBD
 
 ### Added

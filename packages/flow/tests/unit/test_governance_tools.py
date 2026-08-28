@@ -1,3 +1,4 @@
+
 """Offline tools: scan_dependency_cycles / rebuild_dep_counters / recovery wiring."""
 
 from __future__ import annotations
@@ -13,26 +14,10 @@ from orditect.flow.governance import (
 )
 from orditect.flow.recovery.service import RecoveryService
 
-from fake_infra import FakeGovernanceStorage
 from fake_infra import FakeDepGraphStore, FakeGovernanceStorage
 from orditect.protocol import DependencyEdge
 
 pytestmark = pytest.mark.unit
-
-
-# class FakeDepGraphStore:
-#     def __init__(self) -> None:
-#         self.edges: list[tuple[str, str, bool]] = []
-#
-#     async def write_dependency(self, child_id: str, parent_id: str, is_primary: bool) -> None:
-#         self.edges.append((child_id, parent_id, is_primary))
-#
-#     async def read_graph(self, root_id: str) -> dict:
-#         return {"nodes": [], "edges": []}
-#
-#     async def all_edges(self) -> list[tuple[str, str]]:
-#         return [(c, p) for c, p, _ in self.edges]
-
 
 def _gov(storage, **kwargs) -> DependencyGovernor:
     kwargs.setdefault("success_words", frozenset({"succeeded"}))

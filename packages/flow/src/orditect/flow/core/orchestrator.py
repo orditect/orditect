@@ -48,6 +48,13 @@ class TaskOrchestrator:
       Cascade depth limit _MAX_CASCADE_DEPTH prevents cycles.
     - N1: submit supports if_not_exists idempotency.
     - R17-a: background task strong reference prevents GC.
+    - dependency_governor: v0.1.1 passive dependency-governance
+        hookup. NOTE: injecting it here only ATTACHES it — no
+        internal code path uses it automatically (orchestration
+        independence: the executor never emits dependency
+        notifications). Callers must wire notify_task_terminal()
+        at their own task-closure points (composition root /
+        bridge layer).
     """
 
     def __init__(
@@ -181,15 +188,24 @@ class TaskOrchestrator:
         return ok
 
     async def _terminate_single(self, task_id: str) -> bool:
-        """Terminate a single task (without cascading — cascading is driven by terminate uniformly).
+        """Terminate a single task (without cascading — cascading is driven
+        by terminate uniformly).
 
-        Race fallback: when fallback update to CANCELLED hits taskbase Lua terminal protection
-        (task was concurrently closed to terminal right after check), confirming it reached
-        CANCELLED counts as success; other terminal states count as failure — exception no longer escapes.
+        Race fallback: when the fallback update to CANCELLED hits taskbase
+        Lua terminal protection (the task was concurrently closed to terminal
+        right after the check), confirming it reached CANCELLED counts as
+        success; other terminal states count as failure — the exception no
+        longer escapes.
+
+        Returns:
+            True: termination successful (or idempotently confirmed)
+            False: task does not exist or is already terminal
         """
         try:
             task = await self.storage.get_task(task_id)
         except TaskNotFoundError:
+            return False
+        if not task:
             return False
 
         current_status = TaskStatus(task["status"])
@@ -220,7 +236,10 @@ class TaskOrchestrator:
                         f"{task_id} (final: {final_status.value})"
                     )
                     return False
-            logger.info(f"Task terminated (status fallback, coroutine not local): {task_id}")
+            logger.info(
+                f"Task terminated (status fallback, coroutine not local): "
+                f"{task_id}"
+            )
         return True
 
     async def terminate(self, task_id: str) -> bool:
@@ -267,38 +286,31 @@ class TaskOrchestrator:
             timeout: float = 30.0,
             poll_interval: float = 0.05,
     ) -> Dict[str, Any]:
-        """Wait for task to reach terminal state and return the full record (for recursive composition where parent waits for child tasks).
+        """Wait for the task to reach a terminal state and return the full
+        record (for recursive composition where a parent waits for children).
 
-        In recursive composition, parent tasks submitting child tasks need to wait for completion and retrieve results —
-        this method consolidates the polling boilerplate of "get_status until terminal" into a single call.
-
-        Polling interval uses exponential backoff (×1.5, capped at 0.5s) —
-        long-running tasks no longer hammer Redis at fixed 50ms (600 requests → ~15 GETs for 30s).
+        The polling interval uses exponential backoff (x1.5, capped at 0.5s),
+        so long-running tasks no longer hammer Redis at a fixed 50ms.
 
         Args:
             task_id: Task ID
-            timeout: Maximum wait seconds (default 30s, explicit upper bound —
-                consistent with the principle that "any wait has a limit")
-            poll_interval: Starting polling interval in seconds (default 0.05, then backs off)
+            timeout: Maximum wait seconds (explicit upper bound)
+            poll_interval: Starting polling interval in seconds
 
         Returns:
             Full task record (includes status/result/error fields)
 
         Raises:
-            TimeoutError: Task did not reach terminal state within timeout
+            TimeoutError: Task did not reach a terminal state within timeout
             TaskNotFoundError: Task does not exist
-
-        Example (parent waiting for child):
-            child_id = await orchestrator.submit(ChildTask(storage), ...)
-            child = await orchestrator.wait_terminal(child_id, timeout=300)
-            if child["status"] == "succeeded":
-                return {"child_result": child["result"]}
         """
         import time
         deadline = time.monotonic() + timeout
         interval = poll_interval
         while time.monotonic() < deadline:
-            record = await self.storage.get_task(task_id)  # TaskNotFoundError 原样传播
+            record = await self.storage.get_task(task_id)
+            if not record:
+                raise TaskNotFoundError(f"task_id not found: {task_id}")
             status = TaskStatus(record["status"])
             if self.state_machine.is_terminal(status):
                 return record

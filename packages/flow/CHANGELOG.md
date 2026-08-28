@@ -5,7 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - TBD
 
+### Fixed
+- Not-found contract unified (FLIP): `TaskRedisDB.get_task` returns `{}`
+  for missing tasks (documented storage contract); `cancel`/`terminate`
+  now return `False`, and `get_status`/`get_task`/`wait_terminal` raise
+  `TaskNotFoundError` (previously an undeclared `KeyError` escaped on the
+  real backend; the unit suite only covered in-memory fakes).
+- `GovernedCallClient.call_streaming` now evaluates `cost_fn` regardless
+  of budget presence (its output feeds both budget charging and
+  observation; it was incorrectly gated behind the budget branch).
+- `GovernedCallClient.call`: budget-blocked attempts no longer produce an
+  audit record (the budget pre-check now happens before the audited
+  region).
+- Business hooks (`on_success` / `on_failure` / `on_cancel`) are wrapped
+  in try/except (T9: observation never blocks the finalization write
+  chain), and shielded finalize tasks now retrieve exceptions (no more
+  "exception was never retrieved" warnings).
+
+### Changed
+- `protocols/storage.py`: `get_task` contract documented ("missing task
+  returns `{}`; callers must check emptiness").
+- `TaskOrchestrator`: `dependency_governor` documented as attach-only
+  (callers must wire `notify_task_terminal` themselves).
+
+### Tests
+- New integration baseline `test_not_found_real_storage.py` (real
+  TaskRedisDB), flipped to the aligned contract (FLIP).
 
 ## [0.1.3] - TBD
 

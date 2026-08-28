@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.4] - TBD
+
+### Fixed
+- T4 idempotency: `save_terminal` and `append` now compare business
+  content excluding mechanism clock fields via
+  `mechanism.idempotent_payload_equal` — a reconstructed retry with a new
+  producer timestamp is a silent dedup, not a conflict.
+- T3 second face: `save` now merges non-state fields to complete the
+  record (parent_task_id, pointers, error, cost, model, expire_at) — a
+  sparse same-generation save no longer erases previously recorded
+  fields; status advances only with a non-empty incoming value.
+
+### Tests
+- New `test_idempotency_semantics.py`: reconstructed-retry dedup pins.
+- New `TestNonStateMerge`: CF-SNP-013 mirror.
+
 ## [0.1.3] - TBD
 
 ### Changed

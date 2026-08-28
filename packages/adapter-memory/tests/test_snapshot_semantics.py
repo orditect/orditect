@@ -79,3 +79,19 @@ class TestAggregate:
         assert out["done"]["count"] == 2
         assert out["done"]["cost"]["usd"] == pytest.approx(0.3)
         assert out["running"]["count"] == 1
+
+@pytest.mark.unit
+class TestNonStateMerge:
+    """CF-SNP-013 mirror: sparse same-generation save must not erase
+    previously recorded non-state fields (v0.1.4)."""
+
+    async def test_sparse_resave_preserves_cost(self):
+        store = MemoryStore().snapshot
+        await store.save(_snap("t", "s", "e1", "running", cost={"usd": 0.5}))
+        await store.save_terminal(_snap("t", "s", "e1", "done", cost={"usd": 0.5}))
+        # sparse same-generation re-save without cost
+        await store.save(_snap("t", "s", "e1", "done"))
+
+        got = await store.get("t", "s")
+        assert got is not None
+        assert got.cost == {"usd": 0.5}

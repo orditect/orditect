@@ -1,6 +1,107 @@
 # Changelog
 
-# Changelog
+## [0.1.4] - TBD
+
+**v0.1.4 = bugfix-only release.** No new capabilities — every change is a
+fulfillment (and pinning) of an existing contract promise. Each fix below
+carries a "red before / green after" pinning test.
+
+### Fixed (contract violations)
+
+- **flow: not-found contract unified** (FLIP). `TaskRedisDB.get_task`
+  returns `{}` for missing tasks (documented storage contract); flow
+  layers (`cancel` / `terminate` / `get_status` / `wait_terminal`) now
+  check for emptiness and behave per contract — `cancel`/`terminate`
+  return `False`, `get_status`/`get_task`/`wait_terminal` raise
+  `TaskNotFoundError` (previously an undeclared `KeyError` escaped on the
+  real backend; the unit suite only covered in-memory fakes whose
+  `get_task` raises).
+- **protocol/adapters: T4 idempotency no longer polluted by producer
+  clocks** (FLIP). Idempotency comparison now excludes mechanism clock
+  fields (`created_at` / `updated_at` / `registered_at`) via the new
+  `mechanism.idempotent_payload_equal` primitive; a retry reconstructing
+  identical business content with a new producer timestamp is a silent
+  dedup, not a conflict. Applied to `save_terminal` (snapshot) and
+  `append` (audit) in both adapters, and to DR-AUD-001.
+- **core: `quota_reserve.lua` idempotent-renewal TTL gap**. A renewal
+  chain (>= 2 renewals, each within task_ttl) could push a lease's
+  logical lifetime past `pending_key`'s fallback TTL; `pending_key` dying
+  while a live lease remained evaporated the lease's units from the
+  counter and let a later reserve over-admit. The idempotent branch now
+  bumps `pending_key`'s TTL (or rebuilds it from surviving leases when
+  already dead). `lua_contract.md` updated.
+- **core: `quota_release.lua` eternal "0" residue**. Releasing to zero
+  with no TTL now `DEL`s `pending_key` instead of leaving an eternal
+  `"0"` key.
+- **core: ghost dependency counter keys get a TTL fallback**.
+  `_sync_attached_ttl` falls back to `default_expire_time` when the owner
+  hot record is already gone, so a counter created by DECR on a missing
+  key is never eternal.
+- **adapters: T3 second-face merge semantics unified**. A sparse
+  same-generation save no longer erases previously recorded non-state
+  fields (parent_task_id, pointers, error, cost, model, expire_at);
+  status advances only with a non-empty incoming value. New CF-SNP-013
+  pins this; `domains/snapshot.py` merge rule documented.
+- **flow: business hooks can no longer crash finalization**. Hook calls
+  (`on_success` / `on_failure` / `on_cancel`) are wrapped in try/except
+  (T9), and shielded finalize tasks now retrieve exceptions (no more
+  "exception was never retrieved" warnings).
+- **stream: `cancel()` never blocks on a full mux queue**. The cancelled
+  event is best-effort (state is authoritative in the token); the control
+  path no longer waits on the data path.
+- **flow: `GovernedCallClient.call_streaming` evaluates `cost_fn`
+  regardless of budget presence** (its output feeds both budget charging
+  and observation; it was incorrectly gated behind the budget branch).
+- **flow: budget-blocked `GovernedCallClient.call` no longer audited**.
+  The budget pre-check now happens before the audited region, so a
+  blocked attempt (which never acquired a resource) leaves no record.
+
+### Fixed (test/CI infrastructure)
+
+- **conformance: CF-SNP-011/012 registered under the wrong half-domain**
+  (`audit_sink` instead of `snapshot_sink`) — they were skipped on every
+  adapter, so sort/group_by whitelist verification never actually ran.
+  Moved to `cases_snapshot.py`; new meta-pinning test
+  (`TestCaseRegistrationIntegrity`) prevents recurrence.
+- **stream: `test_stream_break_marks_cancelled_and_pointerizes_partial`
+  raced the generator's finally block** — the audit write lands one
+  event-loop tick after `break`; the test now yields before asserting.
+- **bridge-openai: streaming tests now close the generator explicitly**
+  so the finally chain (charge + audit) executes deterministically;
+  `result_fn` returns None only when usage is actually absent (A5).
+- **adapter-ui: `SnapshotView.aggregate` folds to the latest generation
+  per node** (CF-VIEW-004 semantics); `test_aggregate` flipped
+  accordingly. `test_idempotent_action_dedup` flipped: the second pause
+  on an already-terminal task is now correctly REJECTED.
+
+### Changed (docs & hygiene)
+
+- `flow/protocols/storage.py`: `get_task` contract documented ("missing
+  task returns `{}`; callers must check emptiness").
+- `stream/client/resolver.py`: status words are now caller-injectable
+  (`success_words` / `terminal_words`), defaulting to the flow vocabulary
+  (T6; was hardcoded).
+- `core/docs/lua_contract.md`: rewritten in English; preserve-mode TTL
+  precision boundary documented (integer-second rounding; index member
+  may be lazily cleaned up to <1s before the primary record); legacy
+  version references consolidated.
+- `core/docs/design_decisions.md`: rewritten for orditect (legacy
+  taskbase handover content removed; DD-001..DD-010 retained with
+  rationale).
+- `orchestrator`: `dependency_governor` is documented as attach-only
+  (callers must wire `notify_task_terminal` themselves).
+- Repo hygiene: removed committed `build/` trees, stale `*.egg-info`
+  (0.1.2), and the mistakenly packaged `packages/stream/src/orditect/
+  stream/tests/` directory; `.gitignore` updated (`build/`, `*.egg-info/`,
+  `vocabulary-advisory.txt`); deduplicated a `CapabilitySet` import;
+  fixed `_is_match`'s docstring; removed dead `default_task_data
+  ["timestamp"]` value and dead test code.
+
+### Verification
+- All CI gates green; traceability closure OK (12 terms / 29 CF cases /
+  9 DR rules).
+- Every fix carries a red-before/green-after pinning test (see FLIP
+  ledger).
 
 ## [0.1.3] - TBD
 

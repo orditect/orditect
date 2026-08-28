@@ -27,5 +27,37 @@ TIME_RANGE_TARGET: dict[str, str] = {
 GROUP_BY_FIELDS: dict[str, frozenset[str]] = {
     "snapshot": frozenset({"status", "model"}),
 }
+#: Mechanism clock fields excluded from idempotency comparison (T4).
+#: These are producer-clock values (T7) generated at write time, not part of
+#: the business content. Two writes with identical business fields but
+#: different producer timestamps are the SAME write for idempotency purposes.
+IDEMPOTENCY_EXCLUDED_FIELDS: frozenset[str] = frozenset({
+    "created_at",
+    "updated_at",
+    "registered_at",
+})
 
-__all__ = ["SORT_FIELDS", "TIME_RANGE_TARGET", "GROUP_BY_FIELDS"]
+
+def idempotent_payload_equal(a: dict, b: dict) -> bool:
+    """T4 content comparison excluding mechanism clock fields.
+
+    Args:
+        a: first payload dict (e.g. model_dump / to_payload output)
+        b: second payload dict
+
+    Returns:
+        True when the two payloads carry identical business content
+        (all fields except IDEMPOTENCY_EXCLUDED_FIELDS match).
+    """
+    strip = lambda d: {
+        k: v for k, v in d.items() if k not in IDEMPOTENCY_EXCLUDED_FIELDS
+    }
+    return strip(a) == strip(b)
+
+__all__ = [
+    "SORT_FIELDS",
+    "TIME_RANGE_TARGET",
+    "GROUP_BY_FIELDS",
+    "IDEMPOTENCY_EXCLUDED_FIELDS",
+    "idempotent_payload_equal",
+]

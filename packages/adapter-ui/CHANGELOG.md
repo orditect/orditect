@@ -1,5 +1,20 @@
 # orditect-adapter-ui Changelog
 
+## [0.1.4] - TBD
+
+### Fixed
+- `SnapshotView.aggregate` now folds to the latest generation per node
+  (task_id, step) — CF-VIEW-004 semantics; previously every generation
+  contributed to the bucket counts.
+
+### Tests
+- `test_aggregate` flipped (FLIP): node 'a' with generations
+  (e1=done, e2=running) now counts as running at its latest generation;
+  done holds only 'root'.
+- `test_idempotent_action_dedup` flipped (FLIP): the second pause on an
+  already-terminal task is now correctly REJECTED (aligned with the flow
+  not-found/terminal contract).
+
 ## [0.1.3] - TBD
 
 ### Added

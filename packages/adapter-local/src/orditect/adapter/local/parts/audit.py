@@ -15,7 +15,7 @@ from orditect.protocol import (
     SortDirection,
     TimeRange,
 )
-from orditect.protocol.mechanism import SORT_FIELDS
+from orditect.protocol.mechanism import SORT_FIELDS, idempotent_payload_equal
 
 from orditect.adapter.local._common import append_envelope, iter_envelopes, parse_dt
 
@@ -37,8 +37,9 @@ class LocalAuditPart:
         async with self._lock:
             existing = self._find(event.event_id)
             if existing is not None:
-                # Same key: identical payload -> silent dedup; different -> conflict (T4).
-                if existing != event.to_payload():
+                # Same key: identical business content (mechanism clock fields
+                # excluded) -> silent dedup; different content -> conflict (T4).
+                if not idempotent_payload_equal(existing, event.to_payload()):
                     raise IdempotencyConflictError(
                         f"event_id {event.event_id!r} reused with a different payload"
                     )
