@@ -1,2 +1,2 @@
-redis==5.2.1
-orditect-protocol>=0.1,<0.2
+redis>=5.2.1,<9
+orditect-protocol>=0.1.4,<0.2
