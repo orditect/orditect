@@ -129,6 +129,19 @@ class SnapshotView:
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet(snapshot_query=True)
 
+    async def seed(self, fixtures: dict) -> None:
+        """Load fixture payloads into the snapshot view (idempotent).
+
+        Conformance consumer hook: fixtures["snapshots"] is a list of
+        payload dicts; datetime fields arrive as ISO strings.
+        """
+        for raw in fixtures.get("snapshots", []):
+            data = dict(raw)
+            for key in ("expire_at", "created_at", "updated_at"):
+                if isinstance(data.get(key), str):
+                    data[key] = datetime.fromisoformat(data[key])
+            self._rows.append(data)
+
     def _alive(self, d: dict) -> bool:
         expire = d.get("expire_at")
         if expire is None:
@@ -264,6 +277,20 @@ class DependencyView:
     @property
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet(dependency_query=True)
+
+    async def seed(self, fixtures: dict) -> None:
+        """Load fixture payloads into the dependency view (idempotent).
+
+        Conformance consumer hook: fixtures["edges"] is a list of payload
+        dicts; registered_at arrives as an ISO string.
+        """
+        for raw in fixtures.get("edges", []):
+            data = dict(raw)
+            if isinstance(data.get("registered_at"), str):
+                data["registered_at"] = datetime.fromisoformat(
+                    data["registered_at"]
+                )
+            self._rows.append(data)
 
     def _edges(self) -> list[DependencyEdge]:
         return [DependencyEdge.model_validate(d) for d in self._rows]
