@@ -120,6 +120,10 @@ Re-writing with the same key and an identical payload is a silent success
 (deduplication). Re-using the same key with a different payload raises
 `IdempotencyConflictError`. `if_not_exists`-style semantics, where offered,
 mean the existence check and the write happen in one atomic unit.
+Idempotency comparison excludes mechanism clock fields (created_at /
+updated_at / registered_at — producer-clock values per T7): two writes
+whose business content is identical but whose producer timestamps differ
+are the SAME write, never a conflict.
 
 **Origin.** taskbase `task_init.lua` (#14: check-and-write atomicity, exactly
 one winner under concurrency); taskflow v0.3.2 call_id dual-habitat key
@@ -360,6 +364,8 @@ Rules:
 - Data rules use `DR-<DOMAIN>-<NNN>` numbering under the same append-only /
   tombstone policy; every DR id must be referenced from its term row in
   Appendix B (three-way closure with CF cases).
+- CF-SNP-013 (T3): after a terminal save, non-state fields may still merge
+  to complete the record; a sparse same-generation save must not erase them.
 
 ## Appendix A2 — Conformance profiles
 

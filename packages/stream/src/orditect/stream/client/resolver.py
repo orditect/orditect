@@ -29,6 +29,9 @@ class ManifestResolver:
         taskflow_query: TaskflowQueryFn | None = None,
         poll_interval: float = 1.0,
         max_wait: float = 300.0,
+        *,
+        success_words: frozenset[str] | None = None,
+        terminal_words: frozenset[str] | None = None,
     ):
         """
         Args:
@@ -36,10 +39,26 @@ class ManifestResolver:
                 (task_id -> task record dict or None)
             poll_interval: polling interval (seconds)
             max_wait: maximum wait per placeholder (seconds)
+            success_words: caller-declared success terminal words (T6:
+                defaults to the flow vocabulary when not injected)
+            terminal_words: caller-declared terminal words (defaults to the
+                flow vocabulary when not injected)
         """
         self._tf_query = taskflow_query
         self._poll = poll_interval
         self._max_wait = max_wait
+        # Vocabulary neutrality (T6): status words are caller-declared;
+        # the flow vocabulary is only the default, never hardcoded logic.
+        self._success_words = (
+            frozenset(success_words)
+            if success_words is not None
+            else frozenset({"succeeded"})
+        )
+        self._terminal_words = (
+            frozenset(terminal_words)
+            if terminal_words is not None
+            else frozenset({"succeeded", "failed", "cancelled"})
+        )
 
     async def resolve_all(
         self,
@@ -93,11 +112,11 @@ class ManifestResolver:
             if data is None:
                 return _CONTINUE
             status = data.get("status")
-            if status == "succeeded":
+            if status in self._success_words:
                 result = data.get("result") or {}
                 return result.get("url") or result.get("image_oss") or _FAILED
-            if status in ("failed", "cancelled"):
+            if status in self._terminal_words:
                 return _FAILED
-            return _CONTINUE  # pending/queued/running 等，继续等
+            return _CONTINUE  # non-terminal: keep waiting
 
         return _FAILED

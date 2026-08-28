@@ -112,12 +112,40 @@ class _SnapshotPart:
 
     async def save(self, snapshot: TaskSnapshot) -> None:
         key = (snapshot.task_id, snapshot.step, snapshot.execution_id)
-        if key in self._terminal and snapshot.status != self._snap[key].status:
-            raise TerminalStateViolationError(str(key))
+        existing = self._snap.get(key)
+        if key in self._terminal and existing is not None:
+            if snapshot.status != existing.status:
+                raise TerminalStateViolationError(str(key))
+        if existing is not None:
+            updates: dict = {
+                f: getattr(snapshot, f)
+                for f in (
+                    "parent_task_id", "input_pointer", "output_pointer",
+                    "error", "cost", "model", "expire_at",
+                )
+                if getattr(snapshot, f) is not None
+            }
+            # Status advances only when non-empty (state never regresses).
+            if snapshot.status:
+                updates["status"] = snapshot.status
+            updates["updated_at"] = snapshot.updated_at
+            merged = existing.model_copy(update=updates)
+            self._snap[key] = merged
+            return
         self._snap[key] = snapshot
 
     async def save_terminal(self, snapshot: TaskSnapshot) -> None:
         key = (snapshot.task_id, snapshot.step, snapshot.execution_id)
+        existing = self._snap.get(key)
+        if key in self._terminal and existing is not None:
+            # T4: identical business content (mechanism clock fields
+            # excluded) is a silent dedup; differing content conflicts.
+            from orditect.protocol.mechanism import idempotent_payload_equal
+            if not idempotent_payload_equal(
+                existing.model_dump(), snapshot.model_dump()
+            ):
+                raise TerminalStateViolationError(str(key))
+            return
         self._snap[key] = snapshot
         self._terminal.add(key)
 
@@ -651,3 +679,27 @@ class TestProfileValidation:
         import pytest as _pytest
         with _pytest.raises(ValueError, match="unknown conformance profile"):
             run_conformance(_EmptyAdapter(), profile="bogus")
+
+@pytest.mark.unit
+class TestCaseRegistrationIntegrity:
+    """Meta-pinning: every CF case is registered under the half-domain its
+    id prefix implies (prevents silent domain mismatch like CF-SNP-011/012
+    being registered as audit_sink and never executing)."""
+
+    def test_case_domain_prefix_matches_registration(self):
+        from orditect.protocol.conformance.runner import _all_cases
+
+        prefix = {
+            "CTT": "content_sink",
+            "AUD": "audit_sink",
+            "RST": "result_sink",
+            "SNP": "snapshot_sink",
+            "DEP": "dependency_sink",
+            "VIEW": "view",
+        }
+        for c in _all_cases():
+            code = c.case_id.split("-")[1]
+            assert c.half_domain == prefix[code], (
+                f"{c.case_id} registered as {c.half_domain}, "
+                f"expected {prefix[code]}"
+            )

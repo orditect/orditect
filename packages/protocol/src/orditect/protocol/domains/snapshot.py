@@ -41,10 +41,17 @@ class SnapshotWriter(Protocol):
         Semantics: upserts the snapshot identified by
         (task_id, step, execution_id).
 
-        Idempotency / concurrency (terms T4, T10): re-saving the same key with
-        an identical snapshot is a silent success. Concurrent saves with the
-        same key must leave exactly one fully-written record; a partially
-        written state must never be observable.
+        Merge rule (T3 second face): when a record already exists for the
+        same generation, non-state fields (parent_task_id, input_pointer,
+        output_pointer, error, cost, model, expire_at) are merged to
+        complete the record — fields present in the incoming snapshot
+        overwrite, absent fields are preserved. `status` is NEVER merged
+        (it is state); `updated_at` always advances to the latest write.
+
+        Idempotency / concurrency (terms T4, T10): re-saving the same key
+        with identical business content is a silent success. Concurrent
+        saves with the same key must leave exactly one fully-written record;
+        a partially written state must never be observable.
 
         Terminal-state rule (term T3): `terminal` states are declared by the
         caller via `save_terminal`; within one execution generation, after a
@@ -52,11 +59,6 @@ class SnapshotWriter(Protocol):
         generation raise TerminalStateViolationError. Saving a snapshot with
         a *different* execution_id for the same task_id+step is always
         permitted (a new generation, term T11).
-
-        Non-state fields (cost, output_pointer, error, updated_at, expire_at)
-        may be merged into an existing same-generation record even after a
-        terminal state, because they complete the record rather than mutate
-        the state; the merge must be atomic (T10).
 
         Raises:
             TerminalStateViolationError: state mutation within a generation

@@ -23,7 +23,11 @@ from orditect.protocol import (
     TerminalStateViolationError,
     TimeRange,
 )
-from orditect.protocol.mechanism import GROUP_BY_FIELDS, SORT_FIELDS
+from orditect.protocol.mechanism import (
+    GROUP_BY_FIELDS,
+    SORT_FIELDS,
+    idempotent_payload_equal,
+)
 
 from orditect.adapter.local._common import append_envelope, iter_envelopes, parse_dt
 
@@ -48,8 +52,11 @@ class LocalSnapshotPart:
     def _fold(self) -> tuple[dict, set]:
         """Fold the stream into (latest row per key, terminal keys).
 
-        Non-state fields (cost, output_pointer, error, updated_at, expire_at)
-        may merge into a terminal generation's record; status never merges.
+        T3 second face: non-state fields may merge into a terminal
+        generation's record to complete it; status comes from the LATEST
+        row in the stream (it is state, always advancing with the newest
+        write), while non-state fields merge (incoming overwrites, absent
+        fields preserved).
         """
         rows: dict[tuple[str, str, str], dict] = {}
         terminal: set[tuple[str, str, str]] = set()
@@ -64,16 +71,15 @@ class LocalSnapshotPart:
             if existing is None:
                 rows[key] = data
             else:
+                # Status: always the latest row's status (state advances
+                # with the newest write).
+                # Non-state fields: incoming overwrites; previously recorded
+                # fields are preserved only when absent from the incoming row.
                 merged = dict(data)
-                merged["status"] = existing.get("status", "")
-                merged.update(
-                    {
-                        f: existing[f]
-                        for f in ("cost", "output_pointer", "error",
-                                  "updated_at", "expire_at")
-                        if f in existing and f not in data
-                    }
-                )
+                for f in ("parent_task_id", "cost", "output_pointer", "error",
+                          "input_pointer", "model", "expire_at"):
+                    if f not in data and f in existing:
+                        merged[f] = existing[f]
                 rows[key] = merged
             if env.get("op") == "save_terminal":
                 terminal.add(key)
@@ -100,11 +106,16 @@ class LocalSnapshotPart:
             key = (snapshot.task_id, snapshot.step, snapshot.execution_id)
             existing = rows.get(key)
             if key in terminal and existing is not None:
-                if snapshot.to_payload() != existing:
+                # T4: identical business content (mechanism clock fields
+                # excluded) is a silent dedup; differing content is a
+                # conflict (T3).
+                if not idempotent_payload_equal(
+                    existing, snapshot.to_payload()
+                ):
                     raise TerminalStateViolationError(
                         f"conflicting re-save of terminal generation: {key}"
                     )
-                return  # identical re-save is a silent dedup (T4)
+                return
             append_envelope(self._file, "save_terminal", snapshot.to_payload())
 
     # ---------- reader ----------

@@ -7,11 +7,19 @@ from typing import Iterable
 
 from orditect.protocol.rules._types import Finding
 from orditect.protocol.rules.common import iter_domain_rows
-
+from orditect.protocol.mechanism import IDEMPOTENCY_EXCLUDED_FIELDS
 
 def _canonical_payload(data: dict) -> str:
-    """Canonical payload form for identity comparison."""
-    return json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
+    """Canonical payload form for identity comparison (T4).
+
+    Mechanism clock fields (producer-clock values, T7) are excluded: two
+    writes with identical business content but different producer timestamps
+    are the SAME write, not a conflict.
+    """
+    stripped = {
+        k: v for k, v in data.items() if k not in IDEMPOTENCY_EXCLUDED_FIELDS
+    }
+    return json.dumps(stripped, sort_keys=True, ensure_ascii=False, default=str)
 
 
 def dr_aud_001(lines: Iterable[dict]) -> list[Finding]:

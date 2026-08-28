@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orditect-stream"
-version = "0.1.3"
+version = "0.1.4"
 description = "Streaming rich-media output plane for the Orditect ecosystem: SSE streams, multi-stream mux, placeholder enrichment"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,9 +22,9 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.5,<3",
-    "orditect-core>=0.1,<0.2",
-    "orditect-flow>=0.1,<0.2",
-    "orditect-protocol>=0.1,<0.2",
+    "orditect-core>=0.1.4,<0.2",
+    "orditect-flow>=0.1.4,<0.2",
+    "orditect-protocol>=0.1.4,<0.2",
 ]
 
 [project.optional-dependencies]

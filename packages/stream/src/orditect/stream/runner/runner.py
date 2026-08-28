@@ -222,27 +222,40 @@ class StreamRunner:
         return self._partial_contents.get(stream_id, "")
 
     async def _emit_cancelled_event(self, stream_id: str) -> None:
-        """Emit cancellation event (always reachable, even if mux is closed).
+        """Emit a cancellation event (never blocks the control path).
 
-        cancel is an active user action, business layer needs to be aware, so:
-        - mux not closed: normal emit
-        - mux closed: ignore (stream has ended, but cancel status is already recorded in token)
+        The cancelled event is best-effort: the cancel state is already
+        recorded in the token (the authoritative source), so a full mux
+        queue must not stall cancel() — the control path never waits on the
+        data path. On a full queue the event is dropped (the token still
+        carries the state).
         """
         token = self._cancel_tokens.get(stream_id)
         partial = self._partial_contents.get(stream_id, "")
 
-        # mux not closed: deliver normally
-        if not self._mux._closed:
-            await self._mux.emit(
-                stream_id,
-                EventType.STREAM_CANCELLED,
-                make_stream_cancelled(
-                    reason=token.reason or "cancelled by user",
-                    cancelled_at=token.cancelled_at or time.time(),
-                    partial_content=partial,
-                ),
+        if self._mux._closed:
+            return  # stream already ended; state lives in the token
+
+        from orditect.stream.mux.multiplexer import _QueuedItem
+        item = _QueuedItem(
+            stream_id=stream_id,
+            stage=None,
+            event_type=EventType.STREAM_CANCELLED,
+            data=make_stream_cancelled(
+                reason=token.reason or "cancelled by user",
+                cancelled_at=token.cancelled_at or time.time(),
+                partial_content=partial,
+            ),
+        )
+        try:
+            self._mux._queue.put_nowait(item)
+        except asyncio.QueueFull:
+            # Control path never blocks on a full data-path queue. The
+            # cancel state is already authoritative in the token.
+            logger.warning(
+                f"mux queue full, cancelled event dropped "
+                f"(state recorded in token): {stream_id}"
             )
-        # mux closed: cancel state already recorded in token, business layer can query via token
 
     # ---- main stream ----
     async def run(self) -> AsyncIterator[tuple[EventEnvelope, EventType]]:

@@ -56,6 +56,17 @@ class _ExecutionTimeout(Exception):
         and re-raises as asyncio.TimeoutError per the external contract.
         """
 
+def _retrieve_finalize_error(task: "asyncio.Task") -> None:
+    """Retrieve exceptions from shielded finalization tasks to prevent
+    'exception was never retrieved' warnings at GC time. Business-hook
+    failures are already logged at the call site; this only silences the
+    asyncio warning channel."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug(f"Finalize task finished with error (already logged): {exc}")
+
 
 class TaskExecutor:
     """Task executor (responsible for executing tasks)."""
@@ -95,14 +106,19 @@ class TaskExecutor:
     _MAX_LINEAGE_DEPTH = 32
 
     async def _shielded_finalize(self, coro) -> None:
-        """Shielded finalization + strong reference to prevent GC + loop closure fallback.
+        """Shielded finalization + strong reference to prevent GC + loop
+        closure fallback + exception retrieve.
 
-                - The shielded inner task has no strong reference by default; when the main coroutine is cancelled, the inner task becomes a pending orphan
-                  → register in _finalize_tasks to hold until completion;
-                - When the event loop is closed (teardown phase, GC forcibly kills coroutines), create_task raises
-                  RuntimeError('no running event loop') → coro.close() prevents
-                  'never awaited' warning, and finalization is abandoned (resource release during process exit is meaningless).
-                """
+        - The shielded inner task has no strong reference by default; when
+          the main coroutine is cancelled, the inner task becomes a pending
+          orphan -> register in _finalize_tasks to hold until completion.
+        - The done callback both discards the reference AND retrieves any
+          exception (prevents 'exception was never retrieved' warnings).
+        - When the event loop is closed (teardown phase, GC forcibly kills
+          coroutines), create_task raises RuntimeError -> coro.close()
+          prevents 'never awaited' warnings, and finalization is abandoned
+          (resource release during process exit is meaningless).
+        """
         try:
             task = asyncio.create_task(coro)
         except RuntimeError:
@@ -111,6 +127,7 @@ class TaskExecutor:
             return
         self._finalize_tasks.add(task)
         task.add_done_callback(self._finalize_tasks.discard)
+        task.add_done_callback(_retrieve_finalize_error)
         await asyncio.shield(task)
 
     async def _find_ancestor_resources(self, task_id: str) -> set[str]:
@@ -204,6 +221,14 @@ class TaskExecutor:
         except Exception as e:
             logger.warning(f"snapshot write failed (execution unaffected): {task_id}, {e}")
 
+    async def _safe_hook(self, hook, *args) -> None:
+        """Invoke a business hook with try/except (T9: observation hooks
+        must never block or crash the finalization write chain)."""
+        try:
+            await hook(*args)
+        except Exception as e:
+            logger.warning(f"Task hook raised (write chain unaffected): {e}")
+
     async def _try_reuse_result(self, task_id: str) -> tuple[bool, Any]:
         """F3: reuse short-circuit (option B — result lives in the core hot record).
 
@@ -281,27 +306,34 @@ class TaskExecutor:
 
     async def _finalize_failure(self, task_id: str, task: BaseBackEndTask,
                                 error: Exception, outcome: str) -> None:
-        """Complete write chain for failure finalization (wrapped by _shielded_finalize)."""
+        """Complete write chain for failure finalization (wrapped by
+        _shielded_finalize). Hook calls are wrapped in try/except (T9:
+        observation never blocks the write chain)."""
         if await self._is_cancel_requested(task_id):
             await self._settle_cancelled(task_id, outcome)
-            await self._write_snapshot(task_id, TaskStatus.CANCELLED.value, terminal=True, error=error)  # F2
-            await task.on_cancel(task_id)
+            await self._write_snapshot(
+                task_id, TaskStatus.CANCELLED.value, terminal=True, error=error
+            )
+            await self._safe_hook(task.on_cancel, task_id)
         else:
             ok = await self._update_terminal(
                 task_id,
                 {"status": TaskStatus.FAILED.value, "error": str(error)},
             )
             if ok:
-                await self._write_snapshot(task_id, TaskStatus.FAILED.value, terminal=True, error=error)  # F2
-                await task.on_failure(task_id, error)
+                await self._write_snapshot(
+                    task_id, TaskStatus.FAILED.value, terminal=True, error=error
+                )
+                await self._safe_hook(task.on_failure, task_id, error)
             else:
-                await task.on_cancel(task_id)
+                await self._safe_hook(task.on_cancel, task_id)
 
     async def _finalize_cancel(self, task_id: str, task: BaseBackEndTask) -> None:
-        """Write chain for cancellation finalization (wrapped by _shielded_finalize)."""
+        """Write chain for cancellation finalization (wrapped by
+        _shielded_finalize). Hook calls are wrapped in try/except (T9)."""
         await self._update_terminal(task_id, {"status": TaskStatus.CANCELLED.value})
-        await self._write_snapshot(task_id, TaskStatus.CANCELLED.value, terminal=True)  # F2
-        await task.on_cancel(task_id)
+        await self._write_snapshot(task_id, TaskStatus.CANCELLED.value, terminal=True)
+        await self._safe_hook(task.on_cancel, task_id)
     # ---------- main execution flow ----------
 
     async def execute(
@@ -398,7 +430,7 @@ class TaskExecutor:
             # 4. 1c: check cancellation flag after task returns
             if await self._is_cancel_requested(task_id):
                 await self._settle_cancelled(task_id, "succeeded_but_cancelled")
-                await task.on_cancel(task_id)
+                await self._safe_hook(task.on_cancel, task_id)
                 logger.info(f"Task completed but was cancelled: {task_id}")
                 return result
 
@@ -412,11 +444,11 @@ class TaskExecutor:
                 },
             )
             if not ok:
-                await task.on_cancel(task_id)
+                await self._safe_hook(task.on_cancel, task_id)
                 return result
 
-            await self._write_snapshot(task_id, TaskStatus.SUCCEEDED.value, terminal=True)  # F2
-            await task.on_success(task_id, result)
+            await self._write_snapshot(task_id, TaskStatus.SUCCEEDED.value, terminal=True)
+            await self._safe_hook(task.on_success, task_id, result)
             logger.info(f"Task succeeded: {task_id}")
             return result
 
@@ -457,3 +489,4 @@ class TaskExecutor:
             if self.governor and token and not inherited:
                 logger.debug(f"Releasing resource: {resource_name}")
                 await self._shielded_finalize(self.governor.release(resource_name, token))
+

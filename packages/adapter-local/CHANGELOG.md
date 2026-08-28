@@ -1,5 +1,21 @@
 # orditect-adapter-local Changelog
 
+## [0.1.4] - TBD
+
+### Fixed
+- T4 idempotency: `save_terminal` and `append` now compare business
+  content excluding mechanism clock fields via
+  `mechanism.idempotent_payload_equal` — a reconstructed retry with a new
+  producer timestamp is a silent dedup, not a conflict. (The existing
+  `test_save_terminal_identical_resave_dedups` now actually passes.)
+- T3 second face: `_fold` merges non-state fields to complete the record
+  (status taken from the latest row; previously it froze the first row's
+  status, causing terminal-state false rejections on sparse re-saves).
+
+### Tests
+- New `test_idempotency_semantics.py`: reconstructed-retry dedup pins.
+- New `test_sparse_resave_preserves_cost`: CF-SNP-013 mirror.
+
 ## [0.1.3] - TBD
 
 ### Added

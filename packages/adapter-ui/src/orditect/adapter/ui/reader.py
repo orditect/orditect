@@ -232,15 +232,7 @@ class SnapshotView:
             alive = [
                 d for d in alive if d.get("parent_task_id") == parent_task_id
             ]
-        # latest per node
-        latest: dict[str, dict] = {}
-        for d in alive:
-            cur = latest.get(d["task_id"])
-            if cur is None or str(d.get("created_at", "")) >= str(
-                cur.get("created_at", "")
-            ):
-                latest[d["task_id"]] = d
-        return [TaskSnapshot.model_validate(d) for d in latest.values()]
+        return [TaskSnapshot.model_validate(d) for d in alive]
 
     async def aggregate(
         self, *, group_by: str, parent_task_id: str | None = None, **kwargs: Any
@@ -251,13 +243,16 @@ class SnapshotView:
             alive = [
                 d for d in alive if d.get("parent_task_id") == parent_task_id
             ]
-        latest: dict[str, dict] = {}
+        # Latest generation per node (task_id, step) — CF-VIEW-004 semantics:
+        # aggregate counts each node once, at its latest generation.
+        latest: dict[tuple, dict] = {}
         for d in alive:
-            cur = latest.get(d["task_id"])
+            key = (d.get("task_id", ""), d.get("step", ""))
+            cur = latest.get(key)
             if cur is None or str(d.get("created_at", "")) >= str(
                 cur.get("created_at", "")
             ):
-                latest[d["task_id"]] = d
+                latest[key] = d
         out: dict[str, Any] = {}
         for d in latest.values():
             gval = str(d.get(group_by, "unknown"))
@@ -266,7 +261,6 @@ class SnapshotView:
             for k, v in (d.get("cost") or {}).items():
                 bucket["cost"][k] = bucket["cost"].get(k, 0.0) + v
         return out
-
 
 class DependencyView:
     """Query surface over dependency edges (consumer profile)."""
@@ -277,6 +271,7 @@ class DependencyView:
     @property
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet(dependency_query=True)
+
 
     async def seed(self, fixtures: dict) -> None:
         """Load fixture payloads into the dependency view (idempotent).

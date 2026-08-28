@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from orditect.protocol.capabilities import CapabilitySet
-from orditect.protocol.capabilities import CapabilitySet
 from orditect.protocol.conformance.profiles import PROFILES
 
 CaseFn = Callable[[Any], Awaitable[None]]

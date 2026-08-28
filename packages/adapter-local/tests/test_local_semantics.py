@@ -51,6 +51,25 @@ class TestTerminalFolding:
         assert got.status == "done"
         assert got.cost == {"usd": 0.1}
 
+    async def test_sparse_resave_preserves_cost(self, tmp_path):
+        """CF-SNP-013 mirror (v0.1.4): sparse same-generation save must not
+        erase previously recorded non-state fields."""
+        store = LocalFileStore(tmp_path)
+        await store.snapshot.save(
+            _snap("t", "s", "e1", "running").model_copy(
+                update={"cost": {"usd": 0.5}}
+            )
+        )
+        await store.snapshot.save_terminal(
+            _snap("t", "s", "e1", "done").model_copy(
+                update={"cost": {"usd": 0.5}}
+            )
+        )
+        await store.snapshot.save(_snap("t", "s", "e1", "done"))  # sparse
+
+        got = await store.snapshot.get("t", "s")
+        assert got is not None
+        assert got.cost == {"usd": 0.5}
 
 class TestIdempotency:
     async def test_audit_conflict(self, tmp_path):

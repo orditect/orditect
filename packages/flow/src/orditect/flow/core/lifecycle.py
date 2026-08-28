@@ -86,49 +86,64 @@ class TaskLifecycle:
         """
         # 1. get current status
         task = await self.storage.get_task(task_id)
+        if not task:
+            raise TaskNotFoundError(f"task_id not found: {task_id}")
         from_status = TaskStatus(task["status"])
 
         # 2. state machine validation
         self.state_machine.validate_transition(from_status, to_status)
 
-        # 3. update status (use validate_status_transfer=False to avoid conflict with underlying storage's state machine)
-        # note: orditect-flow's state machine may differ from orditect-core's state machine
-        # we trust orditect-flow's state machine, skip underlying storage's state machine validation
+        # 3. update status (use validate_status_transfer=False to avoid
+        # conflict with the underlying storage's own state machine; we trust
+        # orditect-flow's state machine, and the underlying Lua terminal
+        # protection still applies unconditionally).
         await self.storage.update_task(
             task_id,
             {"status": to_status.value},
             validate_status_transfer=False,
         )
-        logger.info(f"Task state transition: {task_id} {from_status.value} -> {to_status.value}")
+        logger.info(
+            f"Task state transition: {task_id} "
+            f"{from_status.value} -> {to_status.value}"
+        )
 
     async def cancel(self, task_id: str) -> bool:
         """Cancel a task.
 
         Race-condition idempotent finalization covers two exception sources:
-        a) taskflow state machine validation rejection (transition_to re-reads and finds terminal);
-        b) taskbase Lua terminal protection rejection (narrow window: after validation passes but before Lua write,
-           task is concurrently closed to terminal) — earlier fix only caught a, but under real TaskRedisDB,
-           b escapes as InvalidStatusTransferError.
+        a) taskflow state machine validation rejection (transition_to
+           re-reads and finds a terminal state);
+        b) taskbase Lua terminal protection rejection (narrow window: after
+           validation passes but before the Lua write, the task is closed to
+           terminal concurrently).
 
         Args:
             task_id: Task ID
 
         Returns:
-            True: cancellation successful (including idempotent confirmation when executor already closed it)
+            True: cancellation successful (including idempotent confirmation
+                when the executor already closed it)
             False: task does not exist or is already terminal
         """
         try:
             task = await self.storage.get_task(task_id)
+            if not task:
+                logger.warning(f"Cannot cancel non-existent task: {task_id}")
+                return False
             current_status = TaskStatus(task["status"])
 
             # terminal task cannot be cancelled
             if self.state_machine.is_terminal(current_status):
-                logger.warning(f"Cannot cancel terminal task: {task_id} (status: {current_status.value})")
+                logger.warning(
+                    f"Cannot cancel terminal task: {task_id} "
+                    f"(status: {current_status.value})"
+                )
                 return False
 
             # mark cancellation request
             try:
-                # F3: task expired/deleted between get and request_cancel → treat as non-existent
+                # F3: task expired/deleted between get and request_cancel
+                # -> treat as non-existent
                 requested = await self.storage.request_cancel(task_id)
             except TaskNotFoundError:
                 return False
@@ -138,8 +153,8 @@ class TaskLifecycle:
             # transition to cancelled
             try:
                 await self.transition_to(task_id, TaskStatus.CANCELLED)
-            except InvalidStateTransitionError as e:
-                # v0.3.2 (#13): Python state machine validation rejects (see docstring path a)
+            except InvalidStateTransitionError:
+                # Path (a): Python state machine validation rejected.
                 final_status = await self.get_status(task_id)
                 if final_status != TaskStatus.CANCELLED:
                     logger.warning(
@@ -148,9 +163,11 @@ class TaskLifecycle:
                     )
                     return False
             except Exception as e:
-                # v0.3.3 (F1 path b): taskbase Lua terminal protection rejects.
-                # transition_to's update_task(validate=False) direct write blocked by underlying layer.
-                if _TaskbaseInvalidTransfer is not None and isinstance(e, _TaskbaseInvalidTransfer):
+                # Path (b): taskbase Lua terminal protection rejected the
+                # direct write (validate=False).
+                if _TaskbaseInvalidTransfer is not None and isinstance(
+                    e, _TaskbaseInvalidTransfer
+                ):
                     final_status = await self.get_status(task_id)
                     if final_status != TaskStatus.CANCELLED:
                         logger.warning(
@@ -181,6 +198,8 @@ class TaskLifecycle:
             TaskNotFoundError: Task does not exist
         """
         task = await self.storage.get_task(task_id)
+        if not task:
+            raise TaskNotFoundError(f"task_id not found: {task_id}")
         return TaskStatus(task["status"])
 
     async def get_task(self, task_id: str) -> dict:
@@ -195,7 +214,10 @@ class TaskLifecycle:
         Raises:
             TaskNotFoundError: Task does not exist
         """
-        return await self.storage.get_task(task_id)
+        task = await self.storage.get_task(task_id)
+        if not task:
+            raise TaskNotFoundError(f"task_id not found: {task_id}")
+        return task
 
     async def is_terminal(self, task_id: str) -> bool:
         """Check whether the task is terminal.

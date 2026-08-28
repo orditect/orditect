@@ -243,6 +243,7 @@ class TestCallStreaming:
         assert budget.charges[0][1] == 2
 
     async def test_stream_break_marks_cancelled_and_pointerizes_partial(self):
+        import asyncio
         audit = RecordingAudit()
         content = FakeContentWriter()
 
@@ -260,6 +261,14 @@ class TestCallStreaming:
             count += 1
             if count == 2:
                 break
+
+        # break triggers GeneratorExit, whose finally block (audit write)
+        # runs on the NEXT event-loop tick. Yield control so the generator's
+        # cleanup completes before asserting.
+        for _ in range(50):
+            if audit.events:
+                break
+            await asyncio.sleep(0.01)
 
         ev = audit.events[0]
         assert ev.payload["cancelled"] is True

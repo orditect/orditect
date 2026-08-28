@@ -72,16 +72,20 @@ class TaskStorageProtocol(Protocol):
             validate_status_transfer: Whether to enable underlying storage state machine validation.
         """
         ...
-
     async def get_task(self, task_id: str) -> Dict[str, Any]:
-        """Request task cancellation.
+        """Get a task record.
+
+        Contract: a MISSING task returns an empty dict ({}), never raises.
+        Callers MUST check for emptiness and raise TaskNotFoundError (or
+        handle the not-found case) themselves.
+
+        Args:
+            task_id: Task ID
 
         Returns:
-            True: cancellation marked successfully.
-            False: task does not exist or is already completed.
+            Task record dict, or {} when the task does not exist.
         """
         ...
-
     async def request_cancel(self, task_id: str) -> bool:
         """Request task cancellation.
 

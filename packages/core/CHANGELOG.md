@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - TBD
+
+### Fixed
+- `quota_reserve.lua` idempotent-renewal TTL gap: a renewal chain (>= 2
+  renewals, each within task_ttl) could push a lease's logical lifetime
+  past `pending_key`'s fallback TTL; the key dying while a live lease
+  remained evaporated the lease's units from the counter and let a later
+  reserve over-admit. The idempotent branch now bumps `pending_key`'s
+  TTL (or rebuilds it from surviving leases when already dead).
+- `quota_release.lua`: releasing to zero with no TTL now `DEL`s
+  `pending_key` instead of leaving an eternal "0" key.
+- `_sync_attached_ttl` falls back to `default_expire_time` when the owner
+  hot record is already gone — a ghost counter created by DECR on a
+  missing key is never eternal.
+
+### Changed
+- `docs/lua_contract.md`: rewritten in English; preserve-mode TTL
+  precision boundary documented (integer-second rounding; index member
+  may be lazily cleaned up to <1s before the primary record); legacy
+  version references consolidated.
+- `docs/design_decisions.md`: rewritten for orditect (legacy taskbase
+  handover content removed; DD-001..DD-010 retained with rationale).
+- `limiter/semaphore.py`: fixed `_is_match`'s docstring (was a
+  copy-paste of `acquire`'s).
+- `redis/task_db.py`: removed the dead constructor-time
+  `default_task_data["timestamp"]` value.
 
 ## [0.1.3] - TBD
 

@@ -73,9 +73,13 @@ class TestSnapshotRead:
     async def test_aggregate(self, bundle_dir):
         reader = TraceBundleReader(bundle_dir)
         out = await reader.snapshot.aggregate(group_by="status")
-        assert out.get("done", {}).get("count", 0) == 2  # root + a(e1)
-        assert out.get("failed", {}).get("count", 0) == 1
-        assert out.get("running", {}).get("count", 0) == 1
+        # FLIP(v0.1.4): aggregate folds to the latest generation per node
+        # (CF-VIEW-004 semantics). Node 'a' has two generations
+        # (e1=done, e2=running); its latest is running, so done holds only
+        # 'root'.
+        assert out.get("done", {}).get("count", 0) == 1      # root only
+        assert out.get("running", {}).get("count", 0) == 1   # a (e2, latest)
+        assert out.get("failed", {}).get("count", 0) == 1    # b
 
 
 class TestDependencyRead:

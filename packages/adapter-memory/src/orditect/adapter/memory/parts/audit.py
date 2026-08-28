@@ -14,7 +14,7 @@ from orditect.protocol import (
     SortDirection,
     TimeRange,
 )
-from orditect.protocol.mechanism import SORT_FIELDS
+from orditect.protocol.mechanism import SORT_FIELDS, idempotent_payload_equal
 
 
 class MemoryAuditPart:
@@ -34,8 +34,11 @@ class MemoryAuditPart:
             if existing is None:
                 self._events[event.event_id] = event
                 return
-            # Same key: identical payload -> silent dedup; different -> conflict (T4).
-            if existing.model_dump() != event.model_dump():
+            # Same key: identical business content (mechanism clock fields
+            # excluded) -> silent dedup; different content -> conflict (T4).
+            if not idempotent_payload_equal(
+                existing.model_dump(), event.model_dump()
+            ):
                 raise IdempotencyConflictError(
                     f"event_id {event.event_id!r} reused with a different payload"
                 )

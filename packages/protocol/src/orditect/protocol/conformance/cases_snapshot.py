@@ -154,3 +154,65 @@ async def aggregate_precision_bound(adapter: Any) -> None:
                                   parent_task_id="cf-010-root")
     total = out["x"]["cost"]["usd"]
     assert abs(total - 0.3) <= 0.3 * 1e-9
+
+@case("CF-SNP-011")
+async def sort_field_outside_whitelist_rejected(adapter: Any) -> None:
+    """CF-SNP-011 (T6): an out-of-whitelist sort.field raises InvalidQueryError."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    from orditect.protocol.errors import InvalidQueryError
+    from orditect.protocol.models import Sort
+
+    try:
+        await adapter.query(sort=Sort(field="cost"))
+    except InvalidQueryError:
+        return
+    raise AssertionError("expected InvalidQueryError, got success")
+
+
+@case("CF-SNP-012")
+async def group_by_outside_whitelist_rejected(adapter: Any) -> None:
+    """CF-SNP-012 (T6): an out-of-whitelist group_by raises InvalidQueryError."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    from orditect.protocol.errors import InvalidQueryError
+
+    try:
+        await adapter.aggregate(group_by="cost")
+    except InvalidQueryError:
+        return
+    raise AssertionError("expected InvalidQueryError, got success")
+
+@case("CF-SNP-013")
+async def non_state_fields_merge_into_terminal_generation(adapter: Any) -> None:
+    """CF-SNP-013 (T3): after a terminal save, non-state fields may still
+    merge to complete the record — a later same-generation save WITHOUT
+    those fields must NOT erase them."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    tid, step, eid = "t-snp-013", "step", "e1"
+
+    # 1. save a full record (with cost), then close the generation as terminal
+    full = TaskSnapshot(
+        task_id=tid, step=step, execution_id=eid,
+        status="running", cost={"usd": 0.5},
+    )
+    await adapter.save(full)
+    await adapter.save_terminal(
+        TaskSnapshot(task_id=tid, step=step, execution_id=eid,
+                     status="done", cost={"usd": 0.5})
+    )
+
+    # 2. re-save the same generation WITHOUT cost (sparse completion record)
+    await adapter.save(
+        TaskSnapshot(task_id=tid, step=step, execution_id=eid, status="done")
+    )
+
+    # 3. the cost must survive (merge = complete the record, never erase)
+    got = await adapter.get(tid, step)
+    assert got is not None
+    assert got.status == "done"
+    assert got.cost == {"usd": 0.5}, (
+        f"non-state field cost was erased by a sparse same-generation save: "
+        f"{got.cost!r}"
+    )

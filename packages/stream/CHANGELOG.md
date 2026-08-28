@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - TBD
+
+### Fixed
+- `StreamRunner.cancel()` no longer blocks on a full mux queue: the
+  cancelled event is best-effort (cancel state is authoritative in the
+  token); the control path never waits on the data path.
+
+### Changed
+- `client/resolver.py`: status words are now caller-injectable
+  (`success_words` / `terminal_words`), defaulting to the flow vocabulary
+  (T6; was hardcoded).
+
+### Tests
+- `test_stream_break_marks_cancelled_and_pointerizes_partial`: the audit
+  write lands one event-loop tick after `break`; the test now yields
+  before asserting (was timing-flaky).
+
+### Hygiene
+- Removed the mistakenly packaged `src/orditect/stream/tests/` directory
+  (was shipped inside the wheel)
+
 ## [0.1.3] - TBD
 
 ### Changed

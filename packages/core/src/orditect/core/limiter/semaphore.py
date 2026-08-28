@@ -98,22 +98,17 @@ class AsyncLeaseSemaphore:
 
     @staticmethod
     def _is_match(result: Any, token_value: str) -> bool:
-        """Blocking wait for acquisition. Timeout raises AcquireTimeoutError. Starts watchdog on success.
-
-        - S4: Lua return value normalized via _is_match (bytes/str) — fixes
-          decode_responses=False client acquire infinite loop to timeout.
-        - S3: post-Lua steps (in_use network / guard creation start)
-          overall fallback: any failure immediately returns slot then raises — caller
-          failure to acquire token can't release, no fallback means slot wasted for one lease period.
+        """Normalize a Lua acquire-script return value for comparison with
+        the expected token (S4: bytes clients, decode_responses=False).
 
         Args:
-            timeout: maximum wait seconds, None means infinite wait
+            result: raw value returned by the acquire Lua script
+                (str | bytes | bytearray | None)
+            token_value: the token we attempted to acquire with
 
         Returns:
-            LeaseToken (includes resource/value/acquired_at)
-
-        Raises:
-            AcquireTimeoutError: still not acquired after timeout
+            True when the script granted this token (after bytes/str
+            normalization); False when the slot was full (None or mismatch).
         """
         if isinstance(result, (bytes, bytearray)):
             result = result.decode("utf-8", errors="ignore")
