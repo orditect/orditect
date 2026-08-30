@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - TBD
+
+### Fixed
+- `task_reopen.lua` now clears the old generation's `result`/`error` — a
+  new generation must not inherit the previous generation's output
+  (prevents a crash between reopen and re-execution from being misjudged
+  as REUSE by resume).
+- `quota_release.lua`: a partial release with pttl<=0 (integer-second TTL
+  truncation in the key's final second) no longer leaves an eternal
+  non-zero pending key — a fallback TTL is applied (new ARGV[2]).
+- `quota_reserve.lua`: the reaping pass no longer writes into a dead
+  pending key (which suppressed the renewal rebuild); a dead counter with
+  surviving leases is rebuilt from the leases before any quota decision,
+  on both the renewal and fresh-reserve paths (over-admission fix).
+- `_sync_attached_ttl` adjudicated final semantics: an attached key that
+  EXISTS follows the owner's TTL (or a fallback when the owner is gone —
+  its data is real business state and must not be dropped); a key that
+  does NOT exist is never materialized (genuine ghosts never pollute
+  SCAN-based queries). (2 FLIPs in pinning tests)
+
+### Changed
+- `docs/lua_contract.md`: reaping window semantics documented (the reaping
+  pass expires leases against the CURRENT call's task_ttl, uniformly
+  across a scope — callers must use a consistent task_ttl_sec per scope);
+  task_reopen / quota_reserve / quota_release sections updated.
+
 ## [0.1.4] - TBD
 
 ### Fixed

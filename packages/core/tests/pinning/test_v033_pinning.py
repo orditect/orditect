@@ -356,6 +356,32 @@ class TestQuotaReleaseResidue:
             assert ttl > 0, "zero pending key must not be eternal"
         await db.close()
 
+    async def test_release_partial_with_persisted_key_gets_fallback_ttl(
+        self, redis_url, redis_client
+    ):
+        """v0.1.5: a partial release (nextv>0) with pttl<=0 must not leave
+        an eternal non-zero pending key — the fallback TTL applies."""
+        db = AdmissionQuotaRedisDB(redis_url)
+        await db.connect()
+
+        await db.reserve_units(
+            scope="rel_part", task_id="t1", units=5,
+            max_units=10, task_ttl_sec=100,
+        )
+        await db.reserve_units(
+            scope="rel_part", task_id="t2", units=3,
+            max_units=10, task_ttl_sec=100,
+        )
+        # simulate the pttl<=0 window (key carries no TTL)
+        await redis_client.persist("admission:rel_part:pending_units")
+
+        await db.release_units(scope="rel_part", task_id="t1")  # nextv = 3 > 0
+
+        ttl = await redis_client.ttl("admission:rel_part:pending_units")
+        assert ttl > 0, "partial release must not leave an eternal key"
+        assert await db.get_pending_units(scope="rel_part") == 3
+        await db.close()
+
 @pytest.mark.pinning
 class TestB3PoolHealthCheck:
     """B3：PoolManager 路径 health_check_interval（纯对象断言，无需 Redis 连接）。
@@ -428,3 +454,65 @@ class TestB4RegistrationDriftWarning:
             registry.register_semaphore("b4_same", redis_client, limit=10, lease_time=5.0)
 
         assert not any("different params" in r.message for r in caplog.records)
+
+@pytest.mark.pinning
+class TestQuotaReserveRebuild:
+    """v0.1.5: a dead pending_key with surviving leases must be rebuilt
+    from the leases before any quota decision (over-admission guard)."""
+
+    async def test_reserve_rebuilds_pending_from_surviving_leases(
+        self, redis_url, redis_client
+    ):
+        db = AdmissionQuotaRedisDB(redis_url)
+        await db.connect()
+
+        await db.reserve_units(
+            scope="rebuild", task_id="t1", units=5,
+            max_units=10, task_ttl_sec=100,
+        )
+        # pending counter dies while the lease survives
+        await redis_client.delete("admission:rebuild:pending_units")
+
+        # 5 (t1) + 4 (t2) = 9 <= 10: admitted
+        r = await db.reserve_units(
+            scope="rebuild", task_id="t2", units=4,
+            max_units=10, task_ttl_sec=100,
+        )
+        assert r["ok"] is True
+
+        # 5 + 4 + 2 = 11 > 10: rejected — without the rebuild this would
+        # read 4 + 2 = 6 and over-admit.
+        r2 = await db.reserve_units(
+            scope="rebuild", task_id="t3", units=2,
+            max_units=10, task_ttl_sec=100,
+        )
+        assert r2["ok"] is False and r2["reason"] == "limit_exceeded"
+        await db.close()
+
+    async def test_renewal_rebuilds_pending_from_surviving_leases(
+        self, redis_url, redis_client
+    ):
+        """Renewal (already_reserved) with a dead pending_key rebuilds from
+        the surviving leases (v0.1.4 branch)."""
+        db = AdmissionQuotaRedisDB(redis_url)
+        await db.connect()
+
+        await db.reserve_units(
+            scope="renewal_rebuild", task_id="t1", units=5,
+            max_units=100, task_ttl_sec=100,
+        )
+        await db.reserve_units(
+            scope="renewal_rebuild", task_id="t2", units=3,
+            max_units=100, task_ttl_sec=100,
+        )
+        # pending counter dies while both leases survive
+        await redis_client.delete("admission:renewal_rebuild:pending_units")
+
+        # renewal of t1: rebuilds from the surviving leases (5 + 3 = 8)
+        r = await db.reserve_units(
+            scope="renewal_rebuild", task_id="t1", units=5,
+            max_units=100, task_ttl_sec=100,
+        )
+        assert r["ok"] is True and r["reason"] == "already_reserved"
+        assert await db.get_pending_units(scope="renewal_rebuild") == 8
+        await db.close()

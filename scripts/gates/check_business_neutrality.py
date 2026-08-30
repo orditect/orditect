@@ -168,10 +168,17 @@ def main() -> int:
     advisory: list[str] = []
 
     for path in iter_python_files(src):
-        if "conformance" in path.parts:
-            # Exempted: conformance content is test-fixture vocabulary, not
-            # contract surface (see module docstring).
+        if "conformance" in path.parts or "rules" in path.parts:
+            # Exempted: conformance content is test-fixture vocabulary, and
+            # rules/ is a data-rule toolkit (M4) — neither is contract
+            # surface (same rationale as the api-surface gate).
             continue
+        rel = rel_posix(root, path)
+        tree = parse_python(path)
+        scan = SurfaceScan(rel)
+        scan.visit(tree)
+        findings.extend(scan.findings)
+        advisory.extend(_advisory_docstrings(rel, tree))
         rel = rel_posix(root, path)
         tree = parse_python(path)
         scan = SurfaceScan(rel)

@@ -94,6 +94,27 @@ class TestReopenBasics:
 
         await db.close()
 
+    async def test_reopen_clears_result_and_error(self, redis_url, redis_client):
+        """v0.1.5: reopen must clear the old generation's result/error —
+        a new generation must not inherit the previous generation's output."""
+        db = TaskRedisDB(redis_url)
+        await db.connect()
+
+        await db.initialize_task("t_clear")
+        await db.update_task("t_clear", {"status": "in_progress"})
+        await db.update_task(
+            "t_clear",
+            {"status": "completed", "result": {"old": 1}, "error": "x"},
+        )
+
+        await db.reopen_task("t_clear")
+
+        task = await db.get_task("t_clear")
+        assert "result" not in task
+        assert "error" not in task
+
+        await db.close()
+
 @pytest.mark.pinning
 class TestReopenConcurrency:
     """T4/T10: concurrent reopen exactly one winner."""

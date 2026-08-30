@@ -176,6 +176,14 @@ class GovernedCallClient:
                 call_id=cid,
                 **kwargs,
             )
+            # C5 (v0.1.5): GovernedClient returns None when the token flipped
+            # to cancelled AFTER acquire (instead of raising) — mark the audit
+            # record as cancelled instead of ok. (Approximation: a handler
+            # legitimately returning None at the same instant is mislabeled;
+            # documented as acceptable, it only affects the audit flag.)
+            if (result is None and cancel_token is not None
+                    and await cancel_token.is_cancelled()):
+                cancelled = True
             return result
         except asyncio.CancelledError:
             cancelled = True
@@ -188,6 +196,15 @@ class GovernedCallClient:
             # failed mid-execution are audited. Budget blocks and pre-acquire
             # cancellations are excluded by the early returns above.
             if executed or error is not None or cancelled:
+                # C2 (v0.1.5): cost_fn is pure; its output feeds both budget
+                # charging (inside GovernedClient) and observation. Record it
+                # whenever it is computed for a successful call.
+                cost_units: int | None = None
+                if error is None and not cancelled and self._budget is not None:
+                    try:
+                        cost_units = self._cost_fn(result)
+                    except Exception as e:
+                        logger.warning(f"cost_fn failed (audit continues): {e}")
                 await self._finalize(
                     cid,
                     ok=error is None and not cancelled,
@@ -197,6 +214,7 @@ class GovernedCallClient:
                     elapsed=time.monotonic() - started,
                     payload_fn=payload_fn,
                     content_fn=content_fn,
+                    cost_units=cost_units,
                 )
 
     # ---------- streaming ----------
@@ -250,6 +268,7 @@ class GovernedCallClient:
         cancelled = False
         error: BaseException | None = None
         result: Any = None
+        cost: int | None = None  # only computed on normal completion
         try:
             async for chunk in fn(*args, **kwargs):
                 yield chunk
@@ -290,6 +309,7 @@ class GovernedCallClient:
                 elapsed=time.monotonic() - started,
                 payload_fn=payload_fn,
                 pointer_data=pointer_data,
+                cost_units=cost,
             )
             try:
                 await asyncio.shield(self.governor.release(self.resource, token))
@@ -312,6 +332,7 @@ class GovernedCallClient:
         payload_fn: PayloadFn | None = None,
         content_fn: ContentFn | None = None,
         pointer_data: bytes | None = None,
+        cost_units: int | None = None,
     ) -> None:
         """Pointer-ize content, then write one audit event."""
         payload: dict[str, Any] = {}
@@ -325,6 +346,10 @@ class GovernedCallClient:
         if cancelled:
             payload["cancelled"] = True
         payload["elapsed_ms"] = int(elapsed * 1000)
+        if cost_units is not None:
+            # C2 (v0.1.5): cost_fn output is recorded whenever evaluated,
+            # making the documented "cost feeds observation" semantics real.
+            payload["cost_units"] = cost_units
         if self._parent_task_id is not None:
             payload["parent_task_id"] = self._parent_task_id
         if self._execution_id is not None:

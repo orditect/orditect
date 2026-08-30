@@ -1,5 +1,19 @@
 # orditect-bridge-openai Changelog
 
+## [0.1.5] - TBD
+
+### Fixed
+- `_latency_ms` no longer leaks into the caller-visible provider response
+  (latency is recorded by GovernedCallClient as `elapsed_ms`; the bridge
+  no longer injects internal fields into the endpoint result). (2 FLIPs
+  in tests)
+
+### Changed
+- Audit payloads now carry `cost_units` whenever cost_fn is evaluated
+  (via the flow GovernedCallClient observability semantics).
+- Dependency floor raised: orditect-protocol>=0.1.5, orditect-core>=0.1.5,
+  orditect-flow>=0.1.5.
+
 ## [0.1.4] - TBD
 
 ### Fixed

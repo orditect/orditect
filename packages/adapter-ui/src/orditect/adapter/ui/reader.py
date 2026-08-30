@@ -23,10 +23,28 @@ from orditect.protocol import (
     CapabilitySet,
     DependencyEdge,
     DependencyGraph,
-    TaskPointer,
+    InvalidQueryError,
+    Page,
+    Sort,
+    SortDirection,
     TaskSnapshot,
+    TimeRange,
+)
+from orditect.protocol.mechanism import (
+    GROUP_BY_FIELDS,
+    SORT_FIELDS,
+    fold_snapshot_rows,
 )
 
+
+def _parse_dt(value: Any) -> datetime | None:
+    """Parse an ISO datetime string (T7: explicit offset expected)."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 class TraceBundleReader:
     """Read a trace bundle directory into queryable domain views.
@@ -151,16 +169,53 @@ class SnapshotView:
         return expire > datetime.now(UTC)
 
     def _fold(self) -> dict[tuple, dict]:
-        """Fold to latest row per (task_id, step, execution_id)."""
-        folded: dict[tuple, dict] = {}
+        """Fold to the record per (task_id, step, execution_id) using the
+        single executable merge definition (adjudicated v0.1.5)."""
+        grouped: dict[tuple, list[dict]] = {}
         for d in self._rows:
-            key = (d.get("task_id", ""), d.get("step", ""), d.get("execution_id", ""))
-            cur = folded.get(key)
+            key = (
+                d.get("task_id", ""),
+                d.get("step", ""),
+                d.get("execution_id", ""),
+            )
+            grouped.setdefault(key, []).append(d)
+        return {
+            key: record
+            for key, seq in grouped.items()
+            if (record := fold_snapshot_rows(seq)) is not None
+        }
+
+    @staticmethod
+    def _latest_per_node(datas: list[dict]) -> list[dict]:
+        """Latest generation per node (task_id, step)."""
+        latest: dict[tuple, dict] = {}
+        for d in datas:
+            key = (d.get("task_id", ""), d.get("step", ""))
+            cur = latest.get(key)
             if cur is None or str(d.get("created_at", "")) >= str(
                 cur.get("created_at", "")
             ):
-                folded[key] = d
-        return folded
+                latest[key] = d
+        return list(latest.values())
+
+    @staticmethod
+    def _validate_snapshot_sort(sort: Sort | None) -> Sort:
+        sort = sort or Sort()
+        if sort.field not in SORT_FIELDS["snapshot"]:
+            raise InvalidQueryError(
+                f"sort.field {sort.field!r} outside the snapshot mechanism "
+                f"whitelist: {sorted(SORT_FIELDS['snapshot'])}"
+            )
+        return sort
+
+    @staticmethod
+    def _sort_key(data: dict, field: str):
+        """Mechanism sort key. No-expiry sorts as infinitely far (ASC last,
+        DESC first) — the string "None" must never join the ordering."""
+        value = data.get(field)
+        if field == "expire_at":
+            return (value is None, str(value) if value is not None else "")
+        return str(value or "")
 
     async def get(
         self, task_id: str, step: str, *, execution_id: str | None = None
@@ -207,14 +262,7 @@ class SnapshotView:
 
         walk(root_task_id, 0)
         if latest_only:
-            latest: dict[str, dict] = {}
-            for d in out:
-                cur = latest.get(d["task_id"])
-                if cur is None or str(d.get("created_at", "")) >= str(
-                    cur.get("created_at", "")
-                ):
-                    latest[d["task_id"]] = d
-            out = list(latest.values())
+            out = self._latest_per_node(out)
         return [TaskSnapshot.model_validate(d) for d in out]
 
     async def query(
@@ -222,39 +270,72 @@ class SnapshotView:
         *,
         status: str | None = None,
         parent_task_id: str | None = None,
+        time_range: TimeRange | None = None,
+        page: Page | None = None,
+        sort: Sort | None = None,
         **kwargs: Any,
     ) -> list[TaskSnapshot]:
+        """Query snapshots by mechanism fields (latest generations only)."""
+        sort = self._validate_snapshot_sort(sort)
         folded = self._fold()
-        alive = [d for d in folded.values() if self._alive(d)]
+        alive = self._latest_per_node(
+            [d for d in folded.values() if self._alive(d)]
+        )
         if status is not None:
             alive = [d for d in alive if d.get("status") == status]
         if parent_task_id is not None:
             alive = [
                 d for d in alive if d.get("parent_task_id") == parent_task_id
             ]
-        return [TaskSnapshot.model_validate(d) for d in alive]
+        if time_range is not None:
+            if time_range.start is not None:
+                alive = [
+                    d
+                    for d in alive
+                    if (dt := _parse_dt(d.get("created_at"))) is not None
+                    and dt >= time_range.start
+                ]
+            if time_range.end is not None:
+                alive = [
+                    d
+                    for d in alive
+                    if (dt := _parse_dt(d.get("created_at"))) is not None
+                    and dt < time_range.end
+                ]
+        alive.sort(
+            key=lambda d: self._sort_key(d, sort.field),
+            reverse=sort.direction is SortDirection.DESC,
+        )
+        page = page or Page()
+        return [
+            TaskSnapshot.model_validate(d)
+            for d in alive[page.offset: page.offset + page.limit]
+        ]
+
 
     async def aggregate(
-        self, *, group_by: str, parent_task_id: str | None = None, **kwargs: Any
+        self,
+        *,
+        group_by: str,
+        parent_task_id: str | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
+        """Aggregate snapshots by a mechanism field (latest generations)."""
+        if group_by not in GROUP_BY_FIELDS["snapshot"]:
+            raise InvalidQueryError(
+                f"group_by {group_by!r} outside the snapshot mechanism "
+                f"whitelist: {sorted(GROUP_BY_FIELDS['snapshot'])}"
+            )
         folded = self._fold()
-        alive = [d for d in folded.values() if self._alive(d)]
+        alive = self._latest_per_node(
+            [d for d in folded.values() if self._alive(d)]
+        )
         if parent_task_id is not None:
             alive = [
                 d for d in alive if d.get("parent_task_id") == parent_task_id
             ]
-        # Latest generation per node (task_id, step) — CF-VIEW-004 semantics:
-        # aggregate counts each node once, at its latest generation.
-        latest: dict[tuple, dict] = {}
-        for d in alive:
-            key = (d.get("task_id", ""), d.get("step", ""))
-            cur = latest.get(key)
-            if cur is None or str(d.get("created_at", "")) >= str(
-                cur.get("created_at", "")
-            ):
-                latest[key] = d
         out: dict[str, Any] = {}
-        for d in latest.values():
+        for d in alive:
             gval = str(d.get(group_by, "unknown"))
             bucket = out.setdefault(gval, {"count": 0, "cost": {}})
             bucket["count"] += 1
@@ -342,8 +423,12 @@ class AuditView:
         task_id: str | None = None,
         scope: str | None = None,
         event_type: str | None = None,
+        time_range: TimeRange | None = None,
+        page: Page | None = None,
+        sort: Sort | None = None,
         **kwargs: Any,
     ) -> list[AuditEvent]:
+        """Query audit events by mechanism fields."""
         rows = [d for d in self._rows]
         if task_id is not None:
             rows = [d for d in rows if d.get("task_id") == task_id]
@@ -351,8 +436,37 @@ class AuditView:
             rows = [d for d in rows if d.get("scope") == scope]
         if event_type is not None:
             rows = [d for d in rows if d.get("event_type") == event_type]
-        return [AuditEvent.model_validate(d) for d in rows]
+        if time_range is not None:
+            if time_range.start is not None:
+                rows = [
+                    d
+                    for d in rows
+                    if (dt := _parse_dt(d.get("created_at"))) is not None
+                    and dt >= time_range.start
+                ]
+            if time_range.end is not None:
+                rows = [
+                    d
+                    for d in rows
+                    if (dt := _parse_dt(d.get("created_at"))) is not None
+                    and dt < time_range.end
+                ]
 
+        sort = sort or Sort()
+        if sort.field not in SORT_FIELDS["audit"]:
+            raise InvalidQueryError(
+                f"sort.field {sort.field!r} outside the audit mechanism "
+                f"whitelist: {sorted(SORT_FIELDS['audit'])}"
+            )
+        rows.sort(
+            key=lambda d: str(d.get(sort.field, "")),
+            reverse=sort.direction is SortDirection.DESC,
+        )
+        page = page or Page()
+        return [
+            AuditEvent.model_validate(d)
+            for d in rows[page.offset: page.offset + page.limit]
+        ]
 
 class ResultView:
     """Query surface over result manifests (consumer profile)."""

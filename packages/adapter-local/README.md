@@ -48,3 +48,16 @@ This is the document-family *reference* — not a production-scale store.
 
 Each part is independently usable and exposes its own `capabilities`
 property, mirroring the per-domain-part structure of the memory adapter.
+
+## Durability & append semantics
+
+- `atomic_write_*` (content blobs, result manifests) uses tmp-file + rename:
+  readers never observe a partially written file.
+- ndjson appends (snapshots / audit / deps) are **best-effort**: a crash
+  mid-append may lose the tail row. Torn tail rows are skipped silently on
+  read (by design, matching append-only log semantics).
+- The adapter does **not** fsync. For crash durability, use the PostgreSQL
+  adapter. This is a development / small-scale reference backend.
+- Read paths fold streams on access (O(n) per query); write paths that
+  dedup or guard scan the stream first (O(n) per write). Sized for ~10k
+  rows per stream file, not production scale.

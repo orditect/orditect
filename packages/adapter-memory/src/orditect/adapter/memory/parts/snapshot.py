@@ -24,6 +24,7 @@ from orditect.protocol import (
 from orditect.protocol.mechanism import (
     GROUP_BY_FIELDS,
     SORT_FIELDS,
+    fold_snapshot_rows,
     idempotent_payload_equal,
 )
 
@@ -48,27 +49,19 @@ class MemorySnapshotPart:
         async with self._lock:
             key = (snapshot.task_id, snapshot.step, snapshot.execution_id)
             existing = self._snaps.get(key)
-            if key in self._terminal:
-                if existing is not None and snapshot.status != existing.status:
+            if key in self._terminal and existing is not None:
+                # T3: only a non-empty, differing status is a state
+                # mutation. An empty status is the absence of intent
+                # (adjudicated v0.1.5) — it never triggers the guard.
+                if snapshot.status and snapshot.status != existing.status:
                     raise TerminalStateViolationError(
                         f"state mutation within terminal generation: {key}"
                     )
             if existing is not None:
-                updates: dict = {
-                    f: getattr(snapshot, f)
-                    for f in (
-                        "parent_task_id", "input_pointer", "output_pointer",
-                        "error", "cost", "model", "expire_at",
-                    )
-                    if getattr(snapshot, f) is not None
-                }
-                # Status advances only when the incoming snapshot carries a
-                # non-empty status (state never regresses to empty).
-                if snapshot.status:
-                    updates["status"] = snapshot.status
-                updates["updated_at"] = snapshot.updated_at
-                merged = existing.model_copy(update=updates)
-                self._snaps[key] = merged
+                record = fold_snapshot_rows(
+                    [existing.model_dump(), snapshot.model_dump()]
+                )
+                self._snaps[key] = TaskSnapshot.model_validate(record)
                 return
             self._snaps[key] = snapshot
 
@@ -125,16 +118,21 @@ class MemorySnapshotPart:
             s for (t, st, _), s in self._snaps.items()
             if t == task_id and st == step and self._alive(s)
         ]
+        from datetime import UTC, datetime
         sort = sort or Sort()
         if sort.field not in SORT_FIELDS["snapshot"]:
             raise InvalidQueryError(
                 f"sort.field {sort.field!r} outside the snapshot mechanism "
                 f"whitelist: {sorted(SORT_FIELDS['snapshot'])}"
             )
-        rows.sort(
-            key=lambda s: getattr(s, sort.field),
-            reverse=sort.direction is SortDirection.DESC,
-        )
+
+        def _key(s: TaskSnapshot):
+            value = getattr(s, sort.field)
+            if sort.field == "expire_at":
+                return (value is None, value or datetime.max.replace(tzinfo=UTC))
+            return value
+
+        rows.sort(key=_key, reverse=sort.direction is SortDirection.DESC)
         page = page or Page()
         return rows[page.offset: page.offset + page.limit]
 
@@ -247,16 +245,21 @@ class MemorySnapshotPart:
                 rows = [s for s in rows if s.created_at >= time_range.start]
             if time_range.end is not None:
                 rows = [s for s in rows if s.created_at < time_range.end]
+        from datetime import UTC, datetime
         sort = sort or Sort()
         if sort.field not in SORT_FIELDS["snapshot"]:
             raise InvalidQueryError(
                 f"sort.field {sort.field!r} outside the snapshot mechanism "
                 f"whitelist: {sorted(SORT_FIELDS['snapshot'])}"
             )
-        rows.sort(
-            key=lambda s: getattr(s, sort.field),
-            reverse=sort.direction is SortDirection.DESC,
-        )
+
+        def _key(s: TaskSnapshot):
+            value = getattr(s, sort.field)
+            if sort.field == "expire_at":
+                return (value is None, value or datetime.max.replace(tzinfo=UTC))
+            return value
+
+        rows.sort(key=_key, reverse=sort.direction is SortDirection.DESC)
         page = page or Page()
         return rows[page.offset: page.offset + page.limit]
 

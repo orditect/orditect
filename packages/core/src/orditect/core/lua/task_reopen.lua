@@ -72,6 +72,12 @@ current["previous_status"] = old_status
 current["execution_id"] = new_execution_id
 current["status"] = initial_status
 current["cancel_requested"] = false
+-- v0.1.5: a new generation must not inherit the previous generation's
+-- output. Clearing result/error keeps the hot record honest until the new
+-- generation produces its own outcome (prevents a crash between reopen and
+-- re-execution from being misjudged as reusable by the recovery plane).
+current["result"] = nil
+current["error"] = nil
 
 local now = redis.call('TIME')
 local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)

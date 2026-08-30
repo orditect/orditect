@@ -121,7 +121,9 @@ class AdmissionQuotaRedisDB(RedisDB):
         """
         raw = await self._get_release_script()(
             keys=[self._pending_key(scope), self._leases_key(scope)],
-            args=[task_id],
+            # ARGV[2]: fallback TTL for the eternal-key guard (the release
+            # side does not know the original task_ttl; a safe default).
+            args=[task_id, str(self.default_expire_time)],
         )
         return self._parse_lua_result(raw)
 

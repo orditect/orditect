@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,9 @@ from typing import Any
 from orditect.protocol import CapabilitySet
 
 from orditect.adapter.local._common import atomic_write_text, read_json
+
+#: stream_id must be a safe single path segment (no traversal).
+_SAFE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class LocalResultPart:
@@ -27,6 +31,8 @@ class LocalResultPart:
         )
 
     def _path(self, stream_id: str) -> Path:
+        if not _SAFE_ID.match(stream_id):
+            raise ValueError(f"unsafe stream_id: {stream_id!r}")
         return self._dir / f"{stream_id}.json"
 
     async def save(

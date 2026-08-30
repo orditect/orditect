@@ -35,6 +35,18 @@ class ReuseDecision(str, Enum):
     REUSE = "reuse"
     RERUN = "rerun"
 
+def _retrieve_rerun_error(task: "asyncio.Task") -> None:
+    """Retrieve exceptions from background rerun tasks (aligned with the
+    orchestrator's F5 discipline; prevents 'exception was never retrieved'
+    warnings at GC time)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug(
+            f"Recovery rerun finished with error "
+            f"(already logged at call site): {exc}"
+        )
 
 class RecoveryService:
     """Drives resume / rerun over a task tree.
@@ -181,3 +193,4 @@ class RecoveryService:
         bg = asyncio.create_task(self._executor.execute(task_id=task_id, task=task))
         self._bg_tasks.add(bg)
         bg.add_done_callback(self._bg_tasks.discard)
+        bg.add_done_callback(_retrieve_rerun_error)

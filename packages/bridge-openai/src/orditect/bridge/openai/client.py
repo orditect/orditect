@@ -125,16 +125,16 @@ class GovernedLLMClient:
         payload = self._payload(messages=messages, model=model, **kwargs)
 
         async def _do() -> dict:
-            started = time.monotonic()
             resp = await self._http.post(
                 f"{self._base}/chat/completions",
                 json=payload,
                 headers=self._headers(),
             )
             resp.raise_for_status()
-            result = resp.json()
-            result["_latency_ms"] = int((time.monotonic() - started) * 1000)
-            return result
+            # C5 (v0.1.5): latency is recorded by GovernedCallClient as
+            # elapsed_ms; never leak internal fields into the caller-visible
+            # provider response.
+            return resp.json()
 
         return await self._call.call(
             handler=_do,
@@ -207,6 +207,8 @@ class GovernedLLMClient:
             result_holder["_latency_ms"] = int(
                 (time.monotonic() - started) * 1000
             )
+            # C5 (v0.1.5): latency comes from the client's elapsed_ms; the
+            # result holder carries only endpoint vocabulary.
             yield SourceChunk(finish=True)
 
         async for chunk in self._call.call_streaming(
@@ -249,8 +251,6 @@ class GovernedLLMClient:
         out: dict[str, Any] = {}
         if result.get("model"):
             out["model"] = result["model"]
-        if result.get("_latency_ms") is not None:
-            out["latency_ms"] = result["_latency_ms"]
         usage = result.get("usage")
         if isinstance(usage, dict):
             out["usage"] = usage
