@@ -227,3 +227,43 @@ class TestAuditSink:
         await ledger.open()
         balance = await ledger.charge(50, call_id="c1")
         assert balance == 50  # 正常工作，无审计副作用
+
+class TestChargeRejectedQuota:
+    async def test_rejected_quota_write_is_logged_and_audited(self, caplog):
+        """v0.1.6 pinning: a rejected quota write must surface as an error
+        log instead of being silently swallowed; the audit record is still
+        written (observation discipline), and the returned balance reflects
+        the counter.
+
+        Red before: reserve_units' ok flag was ignored — a quota rejection
+        was invisible, while the audit record claimed the charge happened.
+        """
+        import logging
+
+        class RejectingQuota(FakeQuotaDB):
+            async def reserve_units(self, **kw):
+                # Only actual charges (units > 0) are rejected; the ledger
+                # open (units == 0) must succeed so the test reaches charge().
+                if kw.get("units", 0) > 0:
+                    return {"ok": False, "reason": "limit_exceeded"}
+                return await super().reserve_units(**kw)
+
+        sink = SpyAuditSink()
+        ledger = BudgetLedger(
+            RejectingQuota(), root_task_id="root-rej", max_units=100,
+            audit_sink=sink,
+        )
+        await ledger.open()
+
+        with caplog.at_level(logging.ERROR):
+            balance = await ledger.charge(10, call_id="c-rej")
+
+        assert any(
+            "quota write rejected" in r.message for r in caplog.records
+        ), "a rejected quota write must be logged explicitly"
+        # audit record still written (the charge was real work; the ledger
+        # divergence is now observable via the log + audit pair)
+        assert len(sink.records) == 1
+        assert sink.records[0]["units"] == 10
+        # balance reflects the counter (nothing was deducted)
+        assert balance == 100

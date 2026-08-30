@@ -7,7 +7,7 @@ lifetime, cancel cleanup) and the usage-missing pricing path.
 """
 
 from __future__ import annotations
-
+import asyncio
 import pytest
 
 from orditect.flow import BudgetExhaustedError, GovernedCallClient
@@ -307,3 +307,33 @@ class TestCallStreaming:
 
         assert gov.acquired == []
         assert audit.events == []
+
+class TestStreamingReleaseStrongRef:
+    async def test_stream_release_completes_and_drains(self):
+        """v0.1.6 pinning: the streaming path's shielded release completes
+        and the strong-ref set drains (no orphaned shield task)."""
+        import time
+
+        class SlowGovernor(FakeGovernor):
+            async def release(self, resource: str, token: str) -> None:
+                await asyncio.sleep(0.1)
+                await super().release(resource, token)
+
+        async def gen():
+            yield 1
+
+        governor = SlowGovernor()
+        client = GovernedCallClient(governor, "res")
+
+        async for _ in client.call_streaming(handler=lambda: gen()):
+            pass
+
+        # release is shielded; wait for it to land and the set to drain
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if governor.released == ["res"] and not client._release_tasks:
+                break
+            await asyncio.sleep(0.02)
+
+        assert governor.released == ["res"]
+        assert client._release_tasks == set()

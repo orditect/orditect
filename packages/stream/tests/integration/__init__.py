@@ -1,5 +1,13 @@
 
-"""全链路 e2e：mock source → runner → SSE 字节流验证（无需 Redis/FastAPI）。"""
+"""Integration tests for orditect-stream (require Redis / taskflow).
+
+The concrete integration cases live in sibling modules (test_e2e.py,
+test_taskflow_adapter.py). This __init__ only marks the package — it must
+NOT contain test cases: pytest does not collect test classes from
+__init__.py files, so any case defined here is dead code that never runs
+(v0.1.6, issue #9).
+"""
+
 import asyncio
 
 import pytest

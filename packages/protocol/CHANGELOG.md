@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - TBD
+
+### Fixed
+- `scripts/generate_schemas.py`: import order — the script's own sys.path
+  injection now precedes every orditect import, so the generator runs on a
+  bare interpreter (fresh clone / CI without the package installed).
+- scripts/gates: the business-neutrality gate's duplicated scan block is
+  removed — every finding/advisory was previously appended twice.
+
+### Added
+- Meta test `tests/meta/test_schema_generator.py`: the generator must run
+  on a bare interpreter.
+
+### Changed
+- Version alignment with ecosystem (no behavior change).
+
 ## [0.1.5] - TBD
 
 ### Added

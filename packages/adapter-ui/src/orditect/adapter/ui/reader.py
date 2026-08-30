@@ -46,6 +46,25 @@ def _parse_dt(value: Any) -> datetime | None:
     except ValueError:
         return None
 
+def _normalize_dt(value: Any) -> datetime | str | None:
+    """Normalize a datetime field to an ISO string.
+
+    Seed payloads arrive as datetime objects while file rows arrive as ISO
+    strings; mixed types make str() ordering inconsistent (' ' < 'T').
+    Normalizing both to ISO strings keeps sort/fold comparisons coherent.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
+def _normalize_row(data: dict) -> dict:
+    """Normalize the mechanism datetime fields of one payload row in place."""
+    for key in ("created_at", "updated_at", "expire_at", "registered_at", "ts"):
+        if key in data:
+            data[key] = _normalize_dt(data[key])
+    return data
+
 class TraceBundleReader:
     """Read a trace bundle directory into queryable domain views.
 
@@ -87,7 +106,7 @@ class TraceBundleReader:
             except json.JSONDecodeError:
                 continue
             if isinstance(row, dict) and isinstance(row.get("data"), dict):
-                rows.append(row["data"])
+                rows.append(_normalize_row(row["data"]))
         return rows
 
     # ---------- seed hook (consumer profile) ----------
@@ -103,14 +122,14 @@ class TraceBundleReader:
             for key in ("expire_at", "created_at", "updated_at"):
                 if isinstance(data.get(key), str):
                     data[key] = datetime.fromisoformat(data[key])
-            self._snapshots.append(data)
+            self._snapshots.append(_normalize_row(data))
         for raw in fixtures.get("edges", []):
             data = dict(raw)
             if isinstance(data.get("registered_at"), str):
                 data["registered_at"] = datetime.fromisoformat(
                     data["registered_at"]
                 )
-            self._edges.append(data)
+            self._edges.append(_normalize_row(data))
 
     # ---------- snapshot view ----------
 
@@ -158,7 +177,7 @@ class SnapshotView:
             for key in ("expire_at", "created_at", "updated_at"):
                 if isinstance(data.get(key), str):
                     data[key] = datetime.fromisoformat(data[key])
-            self._rows.append(data)
+            self._rows.append(_normalize_row(data))
 
     def _alive(self, d: dict) -> bool:
         expire = d.get("expire_at")
@@ -273,7 +292,6 @@ class SnapshotView:
         time_range: TimeRange | None = None,
         page: Page | None = None,
         sort: Sort | None = None,
-        **kwargs: Any,
     ) -> list[TaskSnapshot]:
         """Query snapshots by mechanism fields (latest generations only)."""
         sort = self._validate_snapshot_sort(sort)
@@ -318,7 +336,6 @@ class SnapshotView:
         *,
         group_by: str,
         parent_task_id: str | None = None,
-        **kwargs: Any,
     ) -> dict[str, Any]:
         """Aggregate snapshots by a mechanism field (latest generations)."""
         if group_by not in GROUP_BY_FIELDS["snapshot"]:
@@ -366,7 +383,7 @@ class DependencyView:
                 data["registered_at"] = datetime.fromisoformat(
                     data["registered_at"]
                 )
-            self._rows.append(data)
+            self._rows.append(_normalize_row(data))
 
     def _edges(self) -> list[DependencyEdge]:
         return [DependencyEdge.model_validate(d) for d in self._rows]
@@ -426,7 +443,6 @@ class AuditView:
         time_range: TimeRange | None = None,
         page: Page | None = None,
         sort: Sort | None = None,
-        **kwargs: Any,
     ) -> list[AuditEvent]:
         """Query audit events by mechanism fields."""
         rows = [d for d in self._rows]

@@ -5,11 +5,13 @@ __pycache__/
 
 # Build artifacts
 *.egg-info/
+*.egg-info
 .eggs/
 dist/
 build/
 .pytest_cache/
 .idea/
+
 
 vocabulary-advisory.txt
 flip-ledger-0.1.2.md

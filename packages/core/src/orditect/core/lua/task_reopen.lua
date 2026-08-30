@@ -78,6 +78,12 @@ current["cancel_requested"] = false
 -- re-execution from being misjudged as reusable by the recovery plane).
 current["result"] = nil
 current["error"] = nil
+-- v0.1.6: same rationale for the remaining generation-scoped fields —
+-- progress was written 1.0 by the old generation's success settle, and
+-- cancel_outcome records how the old generation was cancelled; neither may
+-- leak into the new generation.
+current["progress"] = nil
+current["cancel_outcome"] = nil
 
 local now = redis.call('TIME')
 local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)

@@ -22,6 +22,7 @@ from typing import Any
 
 from orditect.flow.actions.models import ActionCommand, ActionQueue, ActionType
 from orditect.flow.recovery import ReuseDecision
+from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +38,26 @@ class ActionDispatcher:
     """
 
     def __init__(
-        self,
-        queue: ActionQueue,
-        orchestrator: Any,
-        recovery: Any,
-        *,
-        poll_interval: float = 1.0,
+            self,
+            queue: ActionQueue,
+            orchestrator: Any,
+            recovery: Any,
+            *,
+            poll_interval: float = 1.0,
+            dedup_capacity: int = 10000,
     ) -> None:
         self._queue = queue
         self._orchestrator = orchestrator
         self._recovery = recovery
         self._poll_interval = poll_interval
-        self._seen: set[str] = set()  # action_id dedup
+        # Bounded LRU dedup window (v0.1.6): an unbounded dict leaks memory
+        # over the process lifetime. Dedup is only guaranteed within the
+        # most recent `dedup_capacity` action_ids; beyond the window a
+        # repeated action_id re-executes (pause is idempotent-harmless;
+        # retry/resume are not — production deployments must use a
+        # persistent queue, see adapter-ui README).
+        self._dedup_capacity = dedup_capacity
+        self._seen: OrderedDict[str, None] = OrderedDict()
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -80,13 +89,27 @@ class ActionDispatcher:
                 continue
             await self._execute(command)
 
+    def _mark_seen(self, action_id: str) -> bool:
+        """Record an action_id in the bounded dedup window.
+
+        Returns True when the id was already present (duplicate); False
+        when it is newly admitted. Evicts the least-recently-used entry
+        once the window is full.
+        """
+        if action_id in self._seen:
+            self._seen.move_to_end(action_id)
+            return True
+        self._seen[action_id] = None
+        if len(self._seen) > self._dedup_capacity:
+            self._seen.popitem(last=False)
+        return False
+
     async def _execute(self, command: ActionCommand) -> None:
         """Validate, execute, and write receipt for one command."""
-        # Idempotency: skip already-seen action_ids
-        if command.action_id in self._seen:
+        # Idempotency: skip already-seen action_ids (bounded window)
+        if self._mark_seen(command.action_id):
             logger.debug(f"action already executed (dedup): {command.action_id}")
             return
-        self._seen.add(command.action_id)
 
         receipt: dict[str, Any] = {
             "action_id": command.action_id,

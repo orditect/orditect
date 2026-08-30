@@ -197,6 +197,11 @@ class TaskOrchestrator:
         success; other terminal states count as failure — the exception no
         longer escapes.
 
+        v0.1.6: request_cancel's False return is now honored, and a task
+        vanishing mid-terminate (get_task -> request_cancel -> transition)
+        returns False instead of leaking TaskNotFoundError — aligned with
+        the sibling semantics of lifecycle.cancel().
+
         Returns:
             True: termination successful (or idempotently confirmed)
             False: task does not exist or is already terminal
@@ -212,7 +217,13 @@ class TaskOrchestrator:
         if self.state_machine.is_terminal(current_status):
             return False
 
-        await self.storage.request_cancel(task_id)
+        try:
+            requested = await self.storage.request_cancel(task_id)
+        except TaskNotFoundError:
+            # Task expired/deleted between get_task and request_cancel.
+            return False
+        if not requested:
+            return False
 
         if self.executor.is_running(task_id):
             await self.executor.cancel(task_id, force=True)
@@ -220,6 +231,9 @@ class TaskOrchestrator:
         else:
             try:
                 await self.lifecycle.transition_to(task_id, TaskStatus.CANCELLED)
+            except TaskNotFoundError:
+                # Task vanished between request_cancel and the transition.
+                return False
             except Exception as e:
                 # F1: same-source race fallback as lifecycle.cancel
                 from orditect.flow.exceptions import InvalidStateTransitionError
@@ -229,7 +243,10 @@ class TaskOrchestrator:
                 )
                 if not is_race:
                     raise
-                final_status = await self.lifecycle.get_status(task_id)
+                try:
+                    final_status = await self.lifecycle.get_status(task_id)
+                except TaskNotFoundError:
+                    return False
                 if final_status != TaskStatus.CANCELLED:
                     logger.warning(
                         f"Terminate fallback rejected (already terminal): "

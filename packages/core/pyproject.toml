@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orditect-core"
-version = "0.1.5"
+version = "0.1.6"
 description = "Async task governance engine for the Orditect ecosystem: Redis task store, distributed lease semaphore & token bucket"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "redis>=5.0,<9",
-    "orditect-protocol>=0.1.5,<0.2",
+    "orditect-protocol>=0.1.6,<0.2",
 ]
 
 [project.optional-dependencies]

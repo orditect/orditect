@@ -176,22 +176,29 @@ class BudgetLedger:
     async def charge(self, units: int, *, call_id: str) -> int:
         """Post-call settlement: deduct actual cost + audit dual-write (Option B).
 
-                Args:
-                    units: actual cost (>0; if <=0, returns current balance directly)
-                    call_id: dual-purpose idempotency key (semantics frozen):
-                        - hot path: quota already_reserved deduplication (retry does not double charge)
-                        - cold path: taskstore audit table call_id PK ON CONFLICT (retry does not double audit)
-                        Business retries of the same logical call must use the same call_id;
-                        framework default is "call-{uuid}" (one new audit record per call).
+        Args:
+            units: actual cost (>0; if <=0, returns current balance directly)
+            call_id: dual-purpose idempotency key (semantics frozen):
+                - hot path: quota already_reserved deduplication (retry does
+                  not double charge)
+                - cold path: taskstore audit table call_id PK ON CONFLICT
+                  (retry does not double audit)
+                Business retries of the same logical call must use the same
+                call_id; framework default is "call-{uuid}" (one new audit
+                record per call).
 
-                Returns:
-                    post-settlement balance (may be negative, overspend recorded as-is)
-                """
+        Returns:
+            post-settlement balance (may be negative, overspend recorded
+            as-is). v0.1.6: when the quota write is rejected (e.g. extreme
+            overspend past the 1000x headroom), the failure is logged
+            explicitly — the audit record is still written (observation
+            discipline), but callers can now tell the two ledgers diverged.
+        """
         if units <= 0:
             return await self.balance()
 
         # 1. Redis real-time deduction (only basis for interception decision)
-        await self._quota.reserve_units(
+        result = await self._quota.reserve_units(
             scope=self.scope,
             task_id=call_id,
             units=units,
@@ -200,10 +207,20 @@ class BudgetLedger:
             max_units=self._max_units * 1000,
             task_ttl_sec=self._ttl,
         )
+        if not result.get("ok"):
+            # v0.1.6: never silently swallow a rejected quota write — the
+            # audit trail below and the Redis counter would diverge.
+            logger.error(
+                f"Budget charge quota write rejected: scope={self.scope} "
+                f"call_id={call_id} units={units} "
+                f"reason={result.get('reason')} "
+                f"(audit record will still be written; ledgers may diverge)"
+            )
         balance = await self.balance()
 
-        # 2. audit detail dual-write (option B reserved; try/except wrapped, never blocks business.
-        # dedup on retry same call_id cold path handled by sink's PK constraint)
+        # 2. audit detail dual-write (option B reserved; try/except wrapped,
+        # never blocks business. dedup on retry same call_id cold path
+        # handled by sink's PK constraint)
         try:
             await self._audit.record_charge(
                 scope=self.scope,

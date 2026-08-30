@@ -1,0 +1,1 @@
+"""Repository-level meta tests (cross-package consistency, tooling)."""

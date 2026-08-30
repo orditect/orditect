@@ -151,3 +151,54 @@ class TestResultRead:
     async def test_get_missing(self, bundle_dir):
         reader = TraceBundleReader(bundle_dir)
         assert await reader.result.get("ghost") is None
+
+class TestUnknownKeywordRejected:
+    async def test_unknown_query_kwarg_raises(self, bundle_dir):
+        """v0.1.6 pinning: an unknown keyword argument (e.g. a caller typo)
+        must raise TypeError instead of being silently swallowed (T8 spirit).
+
+        Red before: query() accepted **kwargs, so query(stats=...) silently
+        no-ops with zero error.
+        """
+        reader = TraceBundleReader(bundle_dir)
+        with pytest.raises(TypeError):
+            await reader.snapshot.query(stats="done")
+
+    async def test_unknown_audit_kwarg_raises(self, bundle_dir):
+        reader = TraceBundleReader(bundle_dir)
+        with pytest.raises(TypeError):
+            await reader.audit.query(task="a")
+
+    async def test_unknown_aggregate_kwarg_raises(self, bundle_dir):
+        reader = TraceBundleReader(bundle_dir)
+        with pytest.raises(TypeError):
+            await reader.snapshot.aggregate(group_by="status", time_range=None)
+
+class TestMixedDatetimeNormalization:
+    async def test_seed_datetime_objects_and_file_strings_coexist(self, bundle_dir):
+        """v0.1.6 pinning: seed-injected datetime objects and file-read ISO
+        strings must compare/sort coherently after normalization.
+
+        Red before: a datetime object and an ISO string lived side by side;
+        str() comparison is inconsistent (' ' < 'T'), so latest-generation
+        folding could pick the wrong row when both forms coexist.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        reader = TraceBundleReader(bundle_dir)
+        # Seed a NEWER generation of node 'a' as datetime objects (newer than
+        # the file rows which carry ISO strings).
+        newer = datetime.now(UTC) + timedelta(hours=1)
+        await reader.seed({"snapshots": [{
+            "task_id": "a", "step": "execute", "execution_id": "e3",
+            "parent_task_id": "root", "status": "done",
+            "created_at": newer, "updated_at": newer,
+        }]})
+
+        snap = await reader.snapshot.get("a", "execute")
+        assert snap is not None
+        assert snap.execution_id == "e3"  # newest generation wins coherently
+
+        rows = await reader.snapshot.query()
+        a_rows = [s for s in rows if s.task_id == "a"]
+        assert a_rows[0].execution_id == "e3"  # latest-only is coherent too

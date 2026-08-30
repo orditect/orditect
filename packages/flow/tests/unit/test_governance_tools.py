@@ -184,3 +184,51 @@ async def test_recovery_without_governor_keeps_snapshot():
     await _wait_for(lambda: executor.executed == ["c"])
     rec = await storage.get_task("c")
     assert rec["exempt_resources_snapshot"] == ["llm"]  # untouched w/o governor
+
+async def test_scan_deep_chain_no_recursion_error():
+    """v0.1.6 pinning: a dependency chain far deeper than Python's recursion
+    limit must not crash the offline scan.
+
+    Red before: the recursive walk() blew past RecursionError around 1000
+    frames — the offline scan (line 2 of cycle detection) collapsed exactly
+    on the graphs it exists to protect.
+    """
+    store = FakeDepGraphStore()
+    depth = 3000  # well past the default recursion limit (~1000)
+    for i in range(depth):
+        await store.write_dependency(
+            DependencyEdge(child_id=f"n{i}", parent_id=f"n{i + 1}", is_primary=True)
+        )
+
+    cycles = await scan_dependency_cycles(store)
+    assert cycles == []  # acyclic long chain must complete cleanly
+
+
+async def test_scan_detects_cycle_beyond_register_dfs_depth():
+    """Cycles deeper than the register-time walk bound (32) are exactly the
+    blind spot this offline tool exists to close."""
+    store = FakeDepGraphStore()
+    depth = 100  # deeper than _MAX_LINEAGE_DEPTH (32)
+    for i in range(depth):
+        await store.write_dependency(
+            DependencyEdge(child_id=f"n{i}", parent_id=f"n{i + 1}", is_primary=True)
+        )
+    await store.write_dependency(
+        DependencyEdge(child_id=f"n{depth}", parent_id="n0", is_primary=True)
+    )  # closes the cycle
+
+    cycles = await scan_dependency_cycles(store)
+    assert len(cycles) == 1
+    assert set(cycles[0]) == {f"n{i}" for i in range(depth + 1)}
+
+
+async def test_scan_shared_parent_no_false_cycle():
+    """Diamonds (a node reached via two paths) must not be misreported as a
+    cycle — the memoized-visited guard must survive the iterative rewrite."""
+    store = FakeDepGraphStore()
+    await store.write_dependency(DependencyEdge(child_id="a", parent_id="b", is_primary=True))
+    await store.write_dependency(DependencyEdge(child_id="a", parent_id="c", is_primary=False))
+    await store.write_dependency(DependencyEdge(child_id="b", parent_id="d", is_primary=True))
+    await store.write_dependency(DependencyEdge(child_id="c", parent_id="d", is_primary=True))
+
+    assert await scan_dependency_cycles(store) == []

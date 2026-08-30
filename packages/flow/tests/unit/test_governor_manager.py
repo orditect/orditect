@@ -71,7 +71,10 @@ class FakeGovernor:
     async def get_usage(self, resource: str) -> int:
         return self._usage.get(resource, 0)
 
-    async def get_limit(self, resource: str) -> int:
+    def get_limit(self, resource: str) -> int:
+        """Sync implementation: pins the v0.1.6 sync/async tolerance in
+        GovernorManager.get_resource_status (previously a bare await raised
+        TypeError on sync get_limit implementations)."""
         return self._limits.get(resource, self.default_limit)
 
     def list_resources(self) -> list[str]:
@@ -244,3 +247,19 @@ class TestGovernorManagerTaskbase:
         # unified "resource" key
         for name, status in all_status.items():
             assert status["resource"] == name
+
+class TestSyncGetLimitTolerance:
+    async def test_sync_get_limit_works(self):
+        """v0.1.6 pinning: a governor whose get_limit is synchronous must be
+        queryable (isawaitable tolerance)."""
+        if HAS_TASKBASE:
+            pytest.skip("taskbase installed: sync get_limit path is ambiguous")
+        governor = FakeGovernor(default_limit=8)
+        governor.set_limit("res_sync", 4)
+
+        manager = GovernorManager(governor)
+        status = await manager.get_resource_status("res_sync")
+
+        assert status["limit"] == 4
+        assert status["resource"] == "res_sync"
+        assert status["usage"] == 0

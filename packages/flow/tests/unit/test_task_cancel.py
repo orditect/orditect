@@ -311,6 +311,79 @@ class TestOrchestratorTerminate:
         # v0.3.3: drain
         await orchestrator.wait_all_finalized()
 
+    async def test_terminate_request_cancel_refused_returns_false(self):
+        """v0.1.6 pinning: a request_cancel refusal (task vanished or already
+        terminal between the reads) yields False instead of proceeding.
+
+        Red before: the return value of request_cancel was ignored, so a
+        refused cancel still flowed into the CANCELLED transition."""
+        storage = FakeStorage()
+        orchestrator = TaskOrchestrator(storage, governor=None)
+
+        await storage.initialize_task("t_refused", "running")
+
+        async def refuse_cancel(task_id: str) -> bool:
+            return False
+
+        storage.request_cancel = refuse_cancel
+        ok = await orchestrator.terminate("t_refused")
+        assert ok is False
+
+        stored = await storage.get_task("t_refused")
+        assert stored["status"] == "running"
+        assert stored["cancel_requested"] is False
+
+    async def test_terminate_task_vanishes_midway_returns_false(self):
+        """v0.1.6 pinning: a task deleted between get_task and request_cancel
+        returns False instead of leaking TaskNotFoundError."""
+        storage = FakeStorage()
+        orchestrator = TaskOrchestrator(storage, governor=None)
+
+        await storage.initialize_task("t_vanish", "running")
+
+        original_request = storage.request_cancel
+
+        async def vanish_on_cancel(task_id: str) -> bool:
+            del storage._tasks[task_id]
+            return await original_request(task_id)
+
+        storage.request_cancel = vanish_on_cancel
+        ok = await orchestrator.terminate("t_vanish")
+        assert ok is False
+
+    async def test_terminate_task_vanishes_before_transition(self):
+        """v0.1.6 pinning: a task deleted between request_cancel and the
+        fallback transition returns False instead of leaking
+        TaskNotFoundError."""
+        storage = FakeStorage()
+        orchestrator = TaskOrchestrator(storage, governor=None)
+
+        await storage.initialize_task("t_vanish2", "running")
+
+        original_transition = orchestrator.lifecycle.transition_to
+
+        async def vanish_on_transition(task_id: str, to_status) -> None:
+            del storage._tasks[task_id]
+            await original_transition(task_id, to_status)
+
+        orchestrator.lifecycle.transition_to = vanish_on_transition
+        ok = await orchestrator.terminate("t_vanish2")
+        assert ok is False
+
+    async def test_terminate_normal_path_still_works(self):
+        """Regression: the honored request_cancel return must not break the
+        normal fallback termination path."""
+        storage = FakeStorage()
+        orchestrator = TaskOrchestrator(storage, governor=None)
+
+        await storage.initialize_task("t_normal", "queued")
+        ok = await orchestrator.terminate("t_normal")
+        assert ok is True
+
+        stored = await storage.get_task("t_normal")
+        assert stored["status"] == "cancelled"
+        assert stored["cancel_requested"] is True
+
 
 # ---------- orchestrator.cancel graceful mode (existing path regression) ----------
 

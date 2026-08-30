@@ -32,6 +32,15 @@ from orditect.protocol import AuditEvent
 
 logger = logging.getLogger(__name__)
 
+def _retrieve_release_error(task: "asyncio.Task") -> None:
+    """Retrieve exceptions from shielded release tasks (prevents
+    'exception was never retrieved' warnings at GC time)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug(f"Governed call release finished with error: {exc}")
+
 #: payload_fn: call result -> audit payload dict (caller-injected vocabulary).
 PayloadFn = Callable[[Any], dict]
 #: content_fn: call result -> bytes worth pointer-izing (None = nothing).
@@ -119,6 +128,9 @@ class GovernedCallClient:
             budget=budget,
             cost_fn=self._cost_fn,
         )
+        # v0.1.6: strong refs for shielded release tasks (mirrors
+        # GovernedClient / executor discipline).
+        self._release_tasks: set[asyncio.Task] = set()
 
     # ---------- non-streaming ----------
 
@@ -311,8 +323,20 @@ class GovernedCallClient:
                 pointer_data=pointer_data,
                 cost_units=cost,
             )
+            # v0.1.6: shield + strong reference for the release task, so an
+            # orphaned shield task is never GC-collected mid-release (the
+            # RuntimeError fallback still covers the teardown-phase case).
             try:
-                await asyncio.shield(self.governor.release(self.resource, token))
+                release_coro = self.governor.release(self.resource, token)
+                try:
+                    release_task = asyncio.create_task(release_coro)
+                except RuntimeError:
+                    release_coro.close()
+                    raise
+                self._release_tasks.add(release_task)
+                release_task.add_done_callback(self._release_tasks.discard)
+                release_task.add_done_callback(_retrieve_release_error)
+                await asyncio.shield(release_task)
             except RuntimeError:
                 logger.warning(
                     "release skipped: no running event loop (teardown phase)"

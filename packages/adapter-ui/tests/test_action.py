@@ -276,3 +276,30 @@ class TestActionDispatcher:
             )
         finally:
             await dispatcher.stop()
+
+class TestBoundedReceipts:
+    async def test_receipts_bounded_evicts_oldest(self):
+        """v0.1.6 pinning: MemoryActionQueue._receipts is bounded; the oldest
+        receipt is evicted once the retention window is full.
+
+        Red before: _receipts grew unboundedly with the number of actions.
+        """
+        queue = MemoryActionQueue(max_receipts=3)
+        for i in range(5):
+            await queue.write_receipt(f"act-{i}", {"status": "executed"})
+
+        assert len(queue._receipts) == 3
+        assert await queue.get_receipt("act-0") is None  # evicted
+        assert await queue.get_receipt("act-1") is None  # evicted
+        assert (await queue.get_receipt("act-4"))["status"] == "executed"
+
+    async def test_receipt_lookup_refreshes_recency(self):
+        queue = MemoryActionQueue(max_receipts=3)
+        for i in range(3):
+            await queue.write_receipt(f"act-{i}", {"status": "executed"})
+        await queue.get_receipt("act-0")  # touch -> most recent
+
+        await queue.write_receipt("act-3", {"status": "executed"})
+
+        assert (await queue.get_receipt("act-0"))["status"] == "executed"
+        assert await queue.get_receipt("act-1") is None  # evicted instead

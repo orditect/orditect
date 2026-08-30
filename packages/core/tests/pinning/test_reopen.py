@@ -115,6 +115,38 @@ class TestReopenBasics:
 
         await db.close()
 
+    async def test_reopen_clears_progress_and_cancel_outcome(self, redis_url, redis_client):
+        """v0.1.6: reopen must also clear generation-scoped settle metadata
+        (progress / cancel_outcome) — same rationale as result/error."""
+        db = TaskRedisDB(redis_url)
+        await db.connect()
+
+        await db.initialize_task("t_clear_meta")
+        await db.update_task("t_clear_meta", {"status": "in_progress"})
+        await db.update_task(
+            "t_clear_meta",
+            {"status": "completed", "result": {"old": 1}, "progress": 1.0},
+        )
+
+        await db.reopen_task("t_clear_meta")
+
+        task = await db.get_task("t_clear_meta")
+        assert "progress" not in task
+
+        # a cancelled generation carrying cancel_outcome must also be cleaned
+        await db.update_task("t_clear_meta", {"status": "in_progress"})
+        await db.update_task(
+            "t_clear_meta",
+            {"status": "cancelled", "cancel_outcome": "failed_but_cancelled"},
+        )
+        await db.reopen_task("t_clear_meta")
+
+        task = await db.get_task("t_clear_meta")
+        assert "cancel_outcome" not in task
+        assert "progress" not in task
+
+        await db.close()
+
 @pytest.mark.pinning
 class TestReopenConcurrency:
     """T4/T10: concurrent reopen exactly one winner."""

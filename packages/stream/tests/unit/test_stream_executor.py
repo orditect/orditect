@@ -87,3 +87,39 @@ class TestStreamExecutor:
         await consume_task
 
         assert len(hits_seen) == 1
+
+from orditect.stream.stream_result import StreamResult as CanonicalStreamResult
+
+
+class TestStreamResultIdentity:
+    async def test_executor_returns_canonical_stream_result(self):
+        """v0.1.6 pinning: StreamExecutor.run() must return the canonical
+        stream.stream_result.StreamResult — not a module-local shadow
+        re-definition (which would break isinstance across the runner /
+        finalizer boundary).
+
+        Red before: runner/stream.py both imported and re-defined
+        StreamResult, so executors produced a different class object than
+        the one runner.py / manifest.py construct.
+        """
+        mux = StreamMux()
+        mux.register("s1")
+        stages = [
+            StageConfig(name="lead", source_type=SourceType.PASSTHROUGH, content="x"),
+        ]
+
+        import asyncio
+        executor = StreamExecutor("s1", stages, DEFAULT_CONFIG, mux)
+        run_task = asyncio.create_task(executor.run())
+
+        async def consume():
+            async for _env, _et in mux.events():
+                pass
+
+        consume_task = asyncio.create_task(consume())
+        result = await run_task
+        await mux.close_stream("s1")
+        await consume_task
+
+        assert isinstance(result, CanonicalStreamResult)
+        assert type(result) is CanonicalStreamResult

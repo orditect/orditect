@@ -30,12 +30,13 @@ import sys
 from pathlib import Path
 
 from pydantic import BaseModel
-from orditect.protocol.capabilities import CapabilitySet
 
 _PKG_ROOT = Path(__file__).resolve().parents[1]
 _SRC = _PKG_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+
+from orditect.protocol.capabilities import CapabilitySet  # noqa: E402
 
 from orditect.protocol.models import (  # noqa: E402
     AuditEvent,

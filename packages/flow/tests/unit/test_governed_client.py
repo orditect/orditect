@@ -236,3 +236,44 @@ class TestGovernedClientCancel:
         )
 
         assert results == [None, 4]
+
+class TestShieldedReleaseStrongRef:
+    async def test_double_cancel_release_completes(self):
+        """v0.1.6 pinning: a second cancellation landing on the release
+        shield must not prevent the release from completing, and the
+        strong-ref set must drain (no orphaned shield task).
+
+        Mirrors the executor's R12/R14 discipline applied to GovernedClient.
+        """
+        import time
+
+        class SlowGovernor(FakeGovernor):
+            async def release(self, resource: str, token: str) -> None:
+                await asyncio.sleep(0.2)
+                await super().release(resource, token)
+
+        governor = SlowGovernor()
+
+        async def work():
+            return "ok"
+
+        client = GovernedClient(governor, "res_a", handler=work)
+
+        runner = asyncio.create_task(client.call())
+        # let the handler finish and enter the shielded release
+        await asyncio.sleep(0.05)
+        runner.cancel()
+        try:
+            await runner
+        except asyncio.CancelledError:
+            pass
+
+        # the shielded release is independent; wait for it to land
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if governor.released == ["res_a"] and not client._release_tasks:
+                break
+            await asyncio.sleep(0.02)
+
+        assert governor.released == ["res_a"]
+        assert client._release_tasks == set()

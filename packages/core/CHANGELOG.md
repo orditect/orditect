@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - TBD
+
+### Fixed
+- `task_reopen.lua` now also clears `progress` / `cancel_outcome` —
+  generation-scoped settle metadata must not leak into a new generation
+  (same rationale as the v0.1.5 result/error clear). `lua_contract.md`
+  updated. New pinning test `test_reopen_clears_progress_and_cancel_outcome`.
+- Shielded release tasks in `SemaphoreHold` / `@limited` are now
+  strong-referenced — an orphaned shield task is never GC-collected
+  mid-release.
+
+### Changed
+- Version alignment with ecosystem (no behavior change).
+
 ## [0.1.5] - TBD
 
 ### Fixed

@@ -204,11 +204,10 @@ class GovernedLLMClient:
                     if obj.get("usage"):
                         result_holder["usage"] = obj["usage"]
                         result_holder["model"] = obj.get("model")
-            result_holder["_latency_ms"] = int(
-                (time.monotonic() - started) * 1000
-            )
-            # C5 (v0.1.5): latency comes from the client's elapsed_ms; the
-            # result holder carries only endpoint vocabulary.
+            # C5 (v0.1.5 / v0.1.6): latency is recorded by GovernedCallClient
+            # as elapsed_ms. The result holder carries only endpoint
+            # vocabulary — never internal fields (_latency_ms would leak into
+            # the caller-visible provider response and into cost_fn input).
             yield SourceChunk(finish=True)
 
         async for chunk in self._call.call_streaming(
