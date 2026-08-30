@@ -146,20 +146,25 @@ class GovernedLLMClient:
     # ---------- streaming (LLMSourceProtocol) ----------
 
     async def stream(
-        self,
-        request: SourceRequest | None = None,
-        *,
-        messages: list[dict] | None = None,
-        model: str | None = None,
-        cancel_token: Any = None,
-        call_id: str | None = None,
-        **kwargs,
+            self,
+            request: SourceRequest | None = None,
+            *,
+            messages: list[dict] | None = None,
+            model: str | None = None,
+            cancel_token: Any = None,
+            call_id: str | None = None,
+            **kwargs,
     ) -> AsyncIterator[SourceChunk]:
         """Streaming governed call implementing LLMSourceProtocol.
 
         Accepts either a SourceRequest (orditect-stream entry) or explicit
         messages= kwargs (direct use). Yields SourceChunk(text=...) deltas and
         a final SourceChunk(finish=True).
+
+        Closing discipline (v0.1.7): closing this generator deterministically
+        acloses the governed stream (whose own finally closes the HTTP stream
+        and releases the semaphore) — resource cleanup never relies on GC
+        timing.
         """
         if request is not None:
             payload = dict(request.payload)
@@ -178,10 +183,10 @@ class GovernedLLMClient:
         async def _gen():
             started = time.monotonic()
             async with self._http.stream(
-                "POST",
-                f"{self._base}/chat/completions",
-                json=body,
-                headers=self._headers(),
+                    "POST",
+                    f"{self._base}/chat/completions",
+                    json=body,
+                    headers=self._headers(),
             ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
@@ -210,7 +215,7 @@ class GovernedLLMClient:
             # the caller-visible provider response and into cost_fn input).
             yield SourceChunk(finish=True)
 
-        async for chunk in self._call.call_streaming(
+        governed_stream = self._call.call_streaming(
             handler=_gen,
             cancel_token=cancel_token,
             call_id=call_id,
@@ -221,8 +226,19 @@ class GovernedLLMClient:
             ),
             partial_fn=lambda: "".join(partial).encode("utf-8") or None,
             payload_fn=lambda r: self._audit_payload(r),
-        ):
-            yield chunk
+        )
+        try:
+            async for chunk in governed_stream:
+                yield chunk
+        finally:
+            # v0.1.7: aclose cascade — async-for never acloses inner
+            # iterators, so the governed stream must be closed explicitly.
+            aclose = getattr(governed_stream, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except RuntimeError:
+                    pass
 
     # ---------- internals ----------
 

@@ -36,6 +36,12 @@ class TaskflowResultStore(ResultStoreProtocol):
     manifest is stored as a special "task record" with task_id = stream_id.
     #5: save's ttl truly takes effect (record-level EXPIRE),
     get returns None for expired records (underlying key has evaporated).
+
+    Reserved status word: the task record's status is set to the reserved
+    word "manifest" (not part of any business state machine). Callers must
+    never drive status transitions on these records — only the manifest
+    field is updated; a status update on a "manifest" record fails loudly
+    with InvalidStatusTransferError by design.
     """
 
     def __init__(self, storage: Any):

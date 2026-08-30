@@ -263,3 +263,38 @@ class TestStreaming:
 
         assert seen and "_latency_ms" not in seen[-1]
         assert set(seen[-1].keys()) <= {"usage", "model"}
+
+class TestStreamAcloseCascade:
+    """v0.1.7 pinning (issue #4): closing the bridge's stream must
+    deterministically release the semaphore and close the HTTP stream via
+    the aclose cascade (GovernedLLMClient.stream -> call_streaming -> _gen),
+    not via GC timing.
+
+    Red before: GovernedLLMClient.stream never aclosed the governed stream,
+    so the release depended on asyncio asyncgen finalization.
+    """
+
+    async def test_break_releases_governor_deterministically(self):
+        async def handler(request: httpx.Request) -> httpx.Response:
+            lines = [
+                json.dumps({"choices": [{"delta": {"content": f"c{i}"}}]})
+                for i in range(50)
+            ]
+            return httpx.Response(
+                200, text=_sse(lines),
+                headers={"Content-Type": "text/event-stream"},
+            )
+
+        store = MemoryStore()
+        governor = FakeGovernor()
+        client = _make_client(handler, store, governor=governor)
+
+        stream = client.stream(messages=[{"role": "user", "content": "hi"}])
+        async for _ in stream:
+            break
+        # aclose returns only after the full finally chain settled (inner
+        # HTTP-stream close + audit finalize + shielded release).
+        await stream.aclose()
+
+        assert governor.released == ["llm"]
+        assert client._call._release_tasks == set()

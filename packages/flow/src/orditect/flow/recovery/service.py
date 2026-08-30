@@ -98,7 +98,10 @@ class RecoveryService:
                 rec = await self._storage.get_task(task_id)
             except Exception:
                 rec = {}
-            if rec.get("result") is not None:
+            if "result" in rec:
+                # Adjudicated v0.1.7 (#11): key presence, not non-None —
+                # a side-effect task that returns None is still reusable,
+                # matching the executor's _try_reuse_result rule.
                 return ReuseDecision.REUSE
         return ReuseDecision.RERUN
 

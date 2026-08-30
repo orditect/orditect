@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.1.7] - TBD
+
+**v0.1.7 = delivery + correctness release.**
+
+### Fixed (delivery)
+
+- **bridge-openai: declare `orditect-stream` as a runtime dependency** —
+  `client.py` imports `orditect.stream.protocols.source`, but pyproject did
+  not declare it; a standalone `pip install orditect-bridge-openai` broke on
+  import with ModuleNotFoundError. The import-boundary gate now cross-checks
+  every legal internal import against pyproject (an undeclared internal
+  dependency is a gate failure), closing the blind spot that neither the
+  gate nor the floors meta test could see.
+
+### Fixed (stream output plane)
+
+- **stream: SSE heartbeat postmortem — four independent defects behind one
+  symptom**:
+  - scheduling: heartbeat frames were only emitted right after a business
+    event, so quiet periods (slow first token / enrich settle windows) left
+    the connection idle for proxies to kill. The heartbeat is now produced
+    by an independent coroutine on a fixed interval, merged with business
+    frames through a local queue — it must never be scheduled on top of
+    the runner's next-event wait, which is itself blocked during a quiet
+    period;
+  - configuration: `create_stream_response` hardcoded a 15.0s interval,
+    silently ignoring the runner's `StreamConfig.heartbeat_interval`;
+  - `StreamRunner.should_buffer` called the monitor's boolean property as
+    a method (TypeError that silently blocked the grace-buffer path on
+    disconnect — a latent defect found by the new pins);
+  - the heartbeat comment frame carried a double prefix (": :ping"),
+    unrecognizable to any consumer matching ":ping". Frame byte formats
+    are now frozen by `tests/golden/test_frame_encoding.py`.
+- **stream: `ManifestResolver` tolerates query-side exceptions** — the
+  documented query contract ("missing task returns None") mismatches
+  `TaskOrchestrator.get_task`, which raises TaskNotFoundError (v0.1.4
+  contract). A resolver polling before the enrich task was submitted
+  crashed through `_poll_task` and failed the whole `resolve_all` gather,
+  taking every other placeholder down with it. Query exceptions are now
+  treated as "not ready yet" (continue polling). New pins in
+  `tests/unit/test_client_resolver.py`.
+
+### Fixed (streaming governance)
+
+- **flow / bridge-openai: aclose cascade on streaming paths** —
+  `GovernedCallClient.call_streaming` and `GovernedLLMClient.stream` never
+  closed their inner iterators (async-for never acloses), so a consumer
+  break left the semaphore release and the HTTP connection cleanup to
+  asyncio asyncgen finalization (GC timing). Both paths now hold the inner
+  iterator and aclose it in finally — deterministically closing the httpx
+  stream and running the full finally chain (finalize + shielded release)
+  on every exit path. New pins.
+- **core / flow: shielded-release discipline completed** (v0.1.6 CHANGELOG
+  claim fulfilled): `@limited` had no strong-reference set at all (its
+  release task could be GC-collected mid-release when the shield await was
+  interrupted), and `GovernedClient._shielded_release` /
+  `SemaphoreHold.__aexit__` lacked the RuntimeError fallback for
+  loop-teardown windows that `TaskExecutor._shielded_finalize` already
+  had. All three now share one discipline: create_task with RuntimeError
+  fallback (close the coroutine, log, skip), strong-ref set with
+  done-callback drain + exception retrieval. New pins.
+
 ## [0.1.6] - TBD
 
 **v0.1.6 = correctness + hygiene release.** No new capabilities — every

@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - TBD
+
+### Fixed
+- SSE heartbeat (postmortem: four independent defects behind one symptom):
+  - scheduling: heartbeat frames were only emitted right after a business
+    event, so quiet periods (slow first token / enrich settle windows) left
+    the connection idle for proxies to kill. The heartbeat is now produced
+    by an independent coroutine on a fixed interval, merged with business
+    frames through a local queue — it must never be scheduled on top of
+    the runner's next-event wait, which is itself blocked during a quiet
+    period;
+  - configuration: `create_stream_response` hardcoded a 15.0s interval,
+    silently ignoring the runner's `StreamConfig.heartbeat_interval`;
+  - `StreamRunner.should_buffer` called the monitor's boolean property as
+    a method (TypeError that silently blocked the grace-buffer path on
+    disconnect — a latent defect found by the new pins);
+  - the heartbeat comment frame carried a double prefix (": :ping"),
+    unrecognizable to any consumer matching ":ping". Frame byte formats
+    are now frozen by `tests/golden/test_frame_encoding.py`.
+- `ManifestResolver`: query-side exceptions (notably TaskNotFoundError
+  from TaskOrchestrator.get_task, whose contract raises for missing
+  tasks) are treated as "not ready yet" instead of crashing the whole
+  resolve_all gather. New pins in `tests/unit/test_client_resolver.py`.
+### Fixed (tooling)
+- tests/conftest.py: sibling package src/ (core, flow, protocol,
+  adapter-memory) is now injected on a fresh clone.
+
+### Changed (docs)
+- `adapters/taskflow.py`: `TaskflowResultStore` documents `manifest` as a
+  reserved status word for its task records (v0.1.6 CHANGELOG claim
+  fulfilled).
+### Fixed
+- `StreamRunner.cancel()`: an unknown stream_id no longer injects a
+  phantom `stream.cancelled` event for a non-existent stream (ignored
+  with a warning). New pin in `tests/unit/test_runner_cancel.py`.
+
 ## [0.1.6] - TBD
 
 ### Fixed

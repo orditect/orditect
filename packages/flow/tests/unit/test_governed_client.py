@@ -277,3 +277,38 @@ class TestShieldedReleaseStrongRef:
 
         assert governor.released == ["res_a"]
         assert client._release_tasks == set()
+
+class TestShieldedReleaseRuntimeErrorFallback:
+    """v0.1.7 pinning (issue #5): when asyncio.create_task is unavailable
+    (loop-teardown window), the shielded release degrades explicitly — the
+    coroutine is closed (no 'never awaited' leak) and a warning is logged,
+    instead of raising RuntimeError out of call().
+
+    Red before: GovernedClient._shielded_release created the task directly;
+    a RuntimeError from create_task escaped the call path and the release
+    coroutine was never closed.
+    """
+
+    async def test_create_task_unavailable_degrades_explicitly(
+        self, monkeypatch, caplog
+    ):
+        import logging
+
+        governor = FakeGovernor()
+
+        async def work():
+            return "ok"
+
+        client = GovernedClient(governor, "res_a", handler=work)
+
+        def boom(coro, **kwargs):
+            raise RuntimeError("simulated loop teardown")
+
+        monkeypatch.setattr(asyncio, "create_task", boom)
+        with caplog.at_level(logging.WARNING):
+            result = await client.call()
+
+        assert result == "ok"
+        assert any(
+            "release skipped" in r.message for r in caplog.records
+        )

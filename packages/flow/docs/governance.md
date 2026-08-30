@@ -245,5 +245,11 @@ cycles = await scan_dependency_cycles(dep_graph_store)
 
 # admin recovery after Redis restart
 stats = await rebuild_dep_counters(storage, dep_graph_store)
-# -> {"rebuilt": int, "skipped": int, "errors": int}
+# -> {"rebuilt": int, "skipped": int, "skipped_children": list[str],
+#     "cancelled": list[str], "pending_cancel": list[str], "errors": int}
 ```
+
+`skipped_children` lists children whose rebuild was abandoned because a
+parent hot record was missing — this signals cold/hot data inconsistency.
+These children will NOT become ready on their own; review the data and
+re-run the rebuild after reconciling, rather than relying on the counters.

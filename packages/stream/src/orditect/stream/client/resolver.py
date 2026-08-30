@@ -104,11 +104,24 @@ class ManifestResolver:
             url string:  success
             _CONTINUE:   not complete, continue polling
             _FAILED:     failed/terminated, stop immediately
+
+        Fault tolerance (v0.1.7, issue #3): any exception raised by the
+        injected query function is treated as _CONTINUE. The documented
+        query contract ("missing task returns None") mismatches
+        TaskOrchestrator.get_task, which RAISES TaskNotFoundError for a
+        task that does not exist yet (v0.1.4 contract). A resolver
+        legitimately starts polling before the enrich task is submitted;
+        an unhandled exception would otherwise escape _poll_task, fail the
+        whole resolve_all gather, and take every other placeholder's
+        resolution down with it.
         """
         if task_ref.startswith("tf:") and self._tf_query:
             # deterministic ID convention: task_id is task_ref without prefix
             task_id = task_ref[3:]
-            data = await self._tf_query(task_id)
+            try:
+                data = await self._tf_query(task_id)
+            except Exception:
+                return _CONTINUE
             if data is None:
                 return _CONTINUE
             status = data.get("status")

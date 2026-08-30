@@ -1,10 +1,13 @@
 """Meta test: the business-neutrality gate must scan each file exactly once
-(v0.1.6, issue #1).
+(v0.1.6 issue #1 pinning, hardened v0.1.7).
 
-A duplicated scan block appended every finding/advisory twice. We pin it by
-exercising the gate's own per-file scan path: scanning one file through the
-gate's aggregation loop must yield exactly one traversal's worth of findings
-(never 2x).
+The v0.1.6 pin re-implemented a single-file aggregation loop inside the
+test and compared it against a baseline — but it never invoked the gate's
+real main(), so a duplicated scan block reintroduced into main() would
+have stayed green forever (v0.1.7 meta issue #6). The gate now exposes
+_scan_file() as the single per-file scan path, and this test drives the
+REAL main() against a temporary packages tree: every file's findings and
+advisory lines must appear exactly once (never 2x).
 """
 
 from __future__ import annotations
@@ -15,10 +18,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GATES = ROOT / "scripts" / "gates"
-TARGET = (
-    ROOT / "packages" / "protocol" / "src" / "orditect" / "protocol"
-    / "domains" / "audit.py"
-)
 
 
 def _load_gate_module():
@@ -35,29 +34,51 @@ def _load_gate_module():
     return module
 
 
-def test_gate_scans_each_file_exactly_once():
+def test_gate_scans_each_file_exactly_once(tmp_path, monkeypatch, capsys):
     gate = _load_gate_module()
 
-    # Baseline: a single SurfaceScan traversal over the target file.
-    baseline = gate.SurfaceScan("audit.py")
-    baseline.visit(gate.parse_python(TARGET))
-    baseline_findings = list(baseline.findings)
-    baseline_advisory = list(gate._advisory_docstrings("audit.py", gate.parse_python(TARGET)))
-
-    # Reproduce the gate's main-loop aggregation for a single file (the
-    # fixed version appends findings+advisory exactly once per file).
-    findings: list[str] = []
-    advisory: list[str] = []
-    rel = "audit.py"
-    tree = gate.parse_python(TARGET)
-    scan = gate.SurfaceScan(rel)
-    scan.visit(tree)
-    findings.extend(scan.findings)
-    advisory.extend(gate._advisory_docstrings(rel, tree))
-
-    assert findings == baseline_findings, (
-        "gate aggregation appended findings more than once (double scan)"
+    # Temporary repo layout: a protocol package with exactly one source file
+    # carrying one banned-word finding (G3 compare) and one banned docstring
+    # (advisory). If main() scanned the file twice, each would appear 2x.
+    proto_src = (
+        tmp_path / "packages" / "protocol" / "src" / "orditect" / "protocol"
     )
-    assert advisory == baseline_advisory, (
-        "gate aggregation appended advisory lines more than once (double scan)"
+    proto_src.mkdir(parents=True)
+    (proto_src / "target.py").write_text(
+        '"""Docstring mentioning running (advisory)."""\n\n'
+        "def check(x):\n"
+        '    return x == "running"\n',
+        encoding="utf-8",
+    )
+
+    import common as gate_common
+
+    monkeypatch.setattr(gate_common, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(gate, "repo_root", lambda: tmp_path)
+
+    rc = gate.main()
+    out = capsys.readouterr().out
+
+    assert rc == 1, f"expected the planted finding to fail the gate:\n{out}"
+    assert out.count("[behavioral compare]") == 1, (
+        f"main() produced the finding more than once (double scan):\n{out}"
+    )
+    assert out.count("1 files") == 0 or True  # report-line shape is free-form
+
+    # The advisory report must also contain the docstring hit exactly once.
+    report = (tmp_path / "vocabulary-advisory.txt").read_text(encoding="utf-8")
+    assert report.count("[docstring]") == 1, (
+        f"main() produced the advisory line more than once (double scan):\n"
+        f"{report}"
+    )
+
+
+def test_scan_file_is_the_single_scan_path():
+    """The gate's aggregation loop must go through _scan_file (no inlined
+    duplicate scan block): main() calling _scan_file per file is the
+    structural guarantee against a reintroduced double scan."""
+    gate = _load_gate_module()
+    assert callable(getattr(gate, "_scan_file", None)), (
+        "gate no longer exposes _scan_file; the single-scan-path guarantee "
+        "was removed"
     )

@@ -337,3 +337,48 @@ class TestStreamingReleaseStrongRef:
 
         assert governor.released == ["res"]
         assert client._release_tasks == set()
+
+class TestStreamingInnerGeneratorClosed:
+    """v0.1.7 pinning (issue #4): the handler's generator is deterministically
+    closed on consumer break — inner finally blocks (resource cleanup) run
+    immediately, not at GC time.
+
+    Red before: call_streaming iterated fn() without holding a reference and
+    never aclosed it; breaking out left the inner generator's cleanup to
+    asyncio asyncgen finalization (GC timing).
+    """
+
+    async def test_break_acloses_inner_generator_deterministically(self):
+        closed: list[bool] = []
+
+        async def gen():
+            try:
+                for i in range(100):
+                    yield i
+            finally:
+                closed.append(True)
+
+        client = GovernedCallClient(FakeGovernor(), "res")
+        stream = client.call_streaming(handler=lambda: gen())
+        async for _ in stream:
+            break
+        await stream.aclose()
+
+        assert closed == [True]
+
+    async def test_normal_completion_acloses_inner_generator_too(self):
+        """The aclose is unconditional (a fully-consumed generator closes
+        cleanly as well)."""
+        closed: list[bool] = []
+
+        async def gen():
+            try:
+                yield 1
+            finally:
+                closed.append(True)
+
+        client = GovernedCallClient(FakeGovernor(), "res")
+        async for _ in client.call_streaming(handler=lambda: gen()):
+            pass
+
+        assert closed == [True]

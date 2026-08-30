@@ -170,14 +170,14 @@ This project is licensed under the **Apache‑2.0** License. See the [LICENSE](L
 
 ## 子包一览
 
-本仓库是五个独立版本化 Python 包的 **monorepo**，共享 `orditect.*` 命名空间：
+本仓库是八个独立版本化 Python 包的 **monorepo**，共享 `orditect.*` 命名空间：
 
 | 包 | 说明 |
 | :--- | :--- |
 | [`orditect-core`](packages/core) | 治理引擎 – Redis + Lua 任务存储、租约信号量、令牌桶、`reopen` 原语。 |
 | [`orditect-flow`](packages/flow) | 编排与恢复 – 递归组合、级联取消、`RecoveryService` 恢复服务。 |
 | [`orditect-stream`](packages/stream) | 输出面 – SSE 协议、占位符、多流复用、断连策略、FastAPI 集成。 |
-| [`orditect-protocol`](packages/protocol) | 存储契约 – 4 个存储域、8 个协议接口、11 条规范条款、符合性测试套件。 |
+| [`orditect-protocol`](packages/protocol) | 存储契约 – 5 个存储域、10 个协议接口、12 条规范条款、符合性测试套件。 |
 | [`orditect-adapter-memory`](packages/adapter-memory) | 参考适配器 – 通过完整符合性套件的内存实现。 |
 
 ---

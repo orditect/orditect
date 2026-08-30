@@ -1,5 +1,47 @@
 # orditect-bridge-openai Changelog
 
+
+## [0.1.7] - TBD
+
+### Fixed
+- Declared `orditect-stream>=0.1.6,<0.2` as a runtime dependency — the
+  client imports `orditect.stream.protocols.source`; a standalone install
+  previously broke on import. The import-boundary gate now cross-checks
+  internal imports against pyproject to prevent recurrence.
+- `GovernedLLMClient.stream`: the governed stream is now aclosed in
+  finally (aclose cascade) — a consumer break deterministically releases
+  the semaphore and closes the HTTP stream instead of relying on GC
+  timing. New pin in `tests/test_client.py`.
+### Fixed (tooling / hygiene)
+
+- **meta: gate no-duplicates pin hardened** — the v0.1.6 pin
+  re-implemented the aggregation loop in the test and never invoked the
+  gate's real main(), so a reintroduced duplicate scan block would have
+  stayed green. The gate now exposes `_scan_file()` as the single per-file
+  scan path and the meta test drives the real main() against a temporary
+  packages tree (each file's findings/advisory appear exactly once).
+- **flow / stream test conftest**: sibling package src/ is now injected on
+  a fresh clone (core / protocol for flow; core / flow / protocol /
+  adapter-memory for stream), mirroring the bridge-openai / adapter-ui
+  conftest pattern — `scripts/run_all_tests.sh` now works without
+  pip-installing sibling packages.
+- **core: `requirements.txt` floor aligned to pyproject**
+  (orditect-protocol>=0.1.6; the floors meta test only reads pyproject).
+
+### Changed (docs)
+
+- `stream/adapters/taskflow.py`: `TaskflowResultStore` documents
+  `manifest` as a reserved status word for its task records (callers must
+  never drive status transitions on them — v0.1.6 CHANGELOG claim
+  fulfilled).
+- `flow/docs/governance.md`: `rebuild_dep_counters` `skipped_children`
+  signals cold/hot data inconsistency — manual review and re-run required
+  (v0.1.6 CHANGELOG claim fulfilled).
+- Doc drift aligned with code reality: protocol README (twelve terms, 5
+  domains, 10 protocols), ROADMAP status table, root README (eight
+  packages, protocol 5域/10协议/12条款).
+
+
 ## [0.1.6] - TBD
 
 ### Fixed
@@ -9,6 +51,7 @@
 
 ### Changed
 - Dependency floors raised to >=0.1.6 (incl. test extra adapter-memory).
+
 
 ## [0.1.5] - TBD
 

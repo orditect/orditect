@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - TBD
+
+### Fixed
+- `@limited`: the shielded release task is now strong-referenced in a
+  module-level set (drains on completion; previously it could be
+  GC-collected mid-release when the shield await was interrupted), and
+  create_task failures degrade explicitly (close coroutine, log, skip).
+  New pins in `tests/unit/test_decorators.py`.
+- `SemaphoreHold.__aexit__`: RuntimeError fallback added for
+  loop-teardown windows, aligned with the executor's discipline. New pin
+  in `tests/pinning/test_semaphore_pinning.py`.
+### Fixed (tooling)
+- `requirements.txt` floor aligned to pyproject
+  (orditect-protocol>=0.1.6).
+### Fixed (adjudicated semantics)
+
+- **stream: ghost cancel no longer injects phantom events** — `cancel()`
+  against a stream_id that was never registered previously emitted a
+  `stream.cancelled` event for a non-existent stream; unknown stream_ids
+  are now ignored with a warning (no phantom frame). New pin in
+  `tests/unit/test_runner_cancel.py`.
+- **flow: None-result reuse rule unified** — the executor's F3 reuse used
+  key-presence (`"result" not in rec`) while `RecoveryService.decide`
+  used non-None (`rec.get("result") is not None`), so a side-effect task
+  (returns None) was reused by the executor but rerun forever by
+  recovery. Both now use key-presence: a legitimately-None result is
+  reusable (adjudicated, no assertion flips). New pins in
+  `tests/unit/test_result_reuse.py`.
+
+### Adjudicated (documented, no behavior change)
+
+- **flow: ActionDispatcher is at-most-once** — an action_id is marked
+  seen before execution, so a failed action is not retried on re-delivery
+  within the bounded dedup window. Producers needing guaranteed execution
+  must use a persistent queue with explicit retry; the in-memory window
+  is best-effort dedup, not a delivery guarantee.
+
 ## [0.1.6] - TBD
 
 ### Fixed

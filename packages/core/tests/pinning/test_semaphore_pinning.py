@@ -97,3 +97,38 @@ class TestLeaseExpiry:
         # can acquire again after release
         t2 = await sem.acquire(timeout=1.0)
         await sem.release(t2)
+
+@pytest.mark.pinning
+class TestHoldReleaseRuntimeErrorFallback:
+    """v0.1.7 pinning (issue #5): SemaphoreHold.__aexit__ degrades
+    explicitly when create_task is unavailable (loop-teardown window):
+    close the coroutine, log, skip — never raise out of the exit path."""
+
+    async def test_hold_exit_with_create_task_unavailable(
+        self, redis_client, monkeypatch, caplog
+    ):
+        import logging
+
+        sem = AsyncLeaseSemaphore(redis_client, "hold_fallback", limit=1, lease_time=5.0)
+
+        hold = sem.hold()
+        token = await hold.__aenter__()
+
+        def boom(coro, **kwargs):
+            raise RuntimeError("simulated loop teardown")
+
+        # Patch AFTER __aenter__: the watchdog start needs the real
+        # create_task; only __aexit__ runs in the patched window.
+        monkeypatch.setattr(asyncio, "create_task", boom)
+        with caplog.at_level(logging.WARNING):
+            await hold.__aexit__(None, None, None)
+
+        assert any(
+            "release skipped" in r.message for r in caplog.records
+        )
+
+        # The release was skipped in the simulated teardown window; release
+        # manually for test isolation.
+        monkeypatch.undo()
+        await sem.release(token)
+        assert await sem.in_use() == 0

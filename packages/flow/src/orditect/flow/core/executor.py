@@ -236,6 +236,13 @@ class TaskExecutor:
         reached a caller-declared success word AND the hot record carries a
         result; the caller then short-circuits execution and reuses it.
 
+        None-result semantics (adjudicated v0.1.7, #11): a task that
+        legitimately returns None (side-effect-only work) still counts as
+        reusable — the check is `"result" not in rec` (key presence), not
+        `rec.get("result") is not None`. RecoveryService.decide uses the
+        same rule, so executor reuse and recovery rerun agree on
+        side-effect tasks.
+
         Capability degradation (T8): any query/storage failure falls back to
         normal execution with a warning — never silently misjudges.
         """

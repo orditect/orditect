@@ -206,3 +206,43 @@ class TestStreamRunnerCancel:
         assert token is not None and token.is_cancelled()
 
         await events_task
+
+class TestGhostCancelIgnored:
+    """v0.1.7 pinning (adjudicated #13): cancel() against a stream_id that
+    was never registered must not inject a phantom stream.cancelled event
+    for a non-existent stream.
+
+    Red before: cancel(stream_id="ghost") emitted a cancelled event whose
+    stream_id did not correspond to any registered substream.
+    """
+
+    async def test_cancel_unknown_stream_id_emits_nothing(self):
+        cfg = DEFAULT_CONFIG.merge(enrich_mode=EnrichMode.LOCAL)
+        runner = StreamRunner(
+            stages=[
+                StageConfig(
+                    name="main",
+                    source_type=SourceType.LLM,
+                    source=_MockSource(
+                        [SourceChunk(text="正文"), SourceChunk(finish=True)],
+                        delay=0.05,
+                    ),
+                ),
+            ],
+            enricher=MockVectorEnricher(),
+            store=MemoryResultStore(),
+            config=cfg,
+        )
+
+        events_task = asyncio.create_task(_collect(runner))
+        await asyncio.sleep(0.1)  # stream registered and running
+
+        partials = await runner.cancel(stream_id="ghost-stream", reason="probe")
+        assert partials == {}  # nothing collected for an unknown stream
+
+        events = await events_task
+        ghost_cancelled = [
+            e for e, et in events
+            if et == EventType.STREAM_CANCELLED and e.stream_id == "ghost-stream"
+        ]
+        assert ghost_cancelled == []

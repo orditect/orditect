@@ -152,3 +152,64 @@ class TestLimitedBucket:
         # should be rejected
         with pytest.raises(AcquireTimeoutError, match="rejected"):
             await my_func()
+
+class TestLimitedReleaseDiscipline:
+    """v0.1.7 pinning (issue #5): @limited's shielded release uses the
+    module-level strong-ref set (drains on completion) and degrades
+    explicitly when create_task is unavailable (loop-teardown window).
+
+    Red before: the wrapper created the release task as a frame-local with
+    no strong reference (GC-collectable mid-release when the shield await
+    was interrupted) and no RuntimeError fallback.
+    """
+
+    def setup_method(self):
+        registry = get_registry()
+        registry.clear()
+
+    async def test_release_strong_ref_drains(self, redis_client):
+        from orditect.core.limiter import decorators as _decorators
+
+        registry = get_registry()
+        registry.register_semaphore("test_sem_sr", redis_client, limit=1, lease_time=5.0)
+
+        @limited(resource="test_sem_sr", mode="wait", timeout=1.0)
+        async def my_func():
+            return "ok"
+
+        assert await my_func() == "ok"
+        assert _decorators._release_tasks == set()
+
+    async def test_release_create_task_unavailable_degrades(
+        self, redis_client, monkeypatch, caplog
+    ):
+        import logging
+
+        registry = get_registry()
+        registry.register_semaphore("test_sem_rt", redis_client, limit=1, lease_time=5.0)
+
+        @limited(resource="test_sem_rt", mode="wait", timeout=1.0)
+        async def my_func():
+            def boom(coro, **kwargs):
+                raise RuntimeError("simulated loop teardown")
+            # Patch inside the function body: only the wrapper's finally
+            # (the release path) executes in the patched window.
+            monkeypatch.setattr(asyncio, "create_task", boom)
+            return "ok"
+
+        with caplog.at_level(logging.WARNING):
+            result = await my_func()
+
+        assert result == "ok"
+        assert any(
+            "release skipped" in r.message for r in caplog.records
+        )
+
+        # The degraded semantics are pinned honestly: the release was
+        # skipped in the simulated teardown window, so the slot leaks until
+        # lease expiry. Clean it up for test isolation.
+        monkeypatch.undo()
+        sem = registry.get_semaphore("test_sem_rt")
+        assert await sem.in_use() == 1
+        for member in await redis_client.zrange(sem.key, 0, -1):
+            await redis_client.zrem(sem.key, member)

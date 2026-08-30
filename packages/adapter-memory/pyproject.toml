@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orditect-adapter-memory"
-version = "0.1.6"
+version = "0.1.7"
 description = "In-memory reference implementation of the orditect-protocol storage contracts (development/test backend)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,7 +19,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "orditect-protocol>=0.1.6,<0.2",
+    "orditect-protocol>=0.1.7,<0.2",
 ]
 
 [project.optional-dependencies]

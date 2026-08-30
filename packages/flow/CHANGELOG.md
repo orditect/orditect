@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - TBD
+
+### Fixed
+- `GovernedCallClient.call_streaming`: the handler's generator is now
+  deterministically aclosed in finally (aclose cascade) — inner resources
+  (e.g. an HTTP stream) are cleaned up on consumer break, not at GC time.
+  New pins in `tests/unit/test_governed_call.py`.
+- `GovernedClient._shielded_release`: RuntimeError fallback added for
+  loop-teardown windows (close the coroutine, log, skip) — aligned with
+  the executor's _shielded_finalize discipline. New pin in
+  `tests/unit/test_governed_client.py`.
+### Fixed (tooling)
+- tests/conftest.py: sibling package src/ (core, protocol) is now injected
+  on a fresh clone, so the suite runs without pip-installed siblings.
+
+### Changed (docs)
+- `docs/governance.md`: `rebuild_dep_counters` `skipped_children` manual-
+  review guidance documented (v0.1.6 CHANGELOG claim fulfilled).
+### Fixed (adjudicated semantics)
+- None-result reuse rule unified between the executor's F3 reuse and
+  `RecoveryService.decide`: both now use key-presence (`"result" in rec`),
+  so a side-effect task (returns None) is reusable on both paths.
+  Adjudicated, no assertion flips. New pins in
+  `tests/unit/test_result_reuse.py`.
+
+### Adjudicated (documented, no behavior change)
+- `ActionDispatcher` is at-most-once: an action_id is marked seen before
+  execution, so a failed action is not retried on re-delivery within the
+  bounded dedup window. Use a persistent queue with explicit retry when a
+  delivery guarantee is required.
+
 ## [0.1.6] - TBD
 
 ### Fixed

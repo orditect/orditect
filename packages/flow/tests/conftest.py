@@ -5,6 +5,16 @@ from pathlib import Path
 # ensure src/ is in sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+# flow tests also need sibling package sources on a fresh clone (no
+# pip-installed packages): fake_infra imports orditect.protocol, and the
+# integration suite imports orditect.core. Mirrors the per-package conftest
+# pattern used by bridge-openai / adapter-ui (v0.1.7, issue #7).
+_REPO = Path(__file__).resolve().parents[3]
+for _pkg in ("core", "protocol"):
+    _src = _REPO / "packages" / _pkg / "src"
+    if _src.is_dir() and str(_src) not in sys.path:
+        sys.path.insert(0, str(_src))
+
 import os
 import pytest
 import redis.asyncio as aioredis

@@ -11,7 +11,7 @@ The core governance machinery is **implemented and stable**:
 
 | Module | Status |
 | :--- | :--- |
-| `orditect-protocol` | ✅ Implemented – 4 domains, 8 protocols, 11 normative terms, conformance suite baseline |
+| `orditect-protocol` | ✅ Implemented – 5 domains, 10 protocols, 12 normative terms, conformance suite baseline |
 | `orditect-core` | ✅ Implemented – Redis + Lua atomic operations, lease semaphore, token bucket, `reopen` primitive |
 | `orditect-flow` | ✅ Implemented – Recursive composition, cascading cancellation, resource exemption, `RecoveryService` |
 | `orditect-stream` | ✅ Implemented – SSE protocol, multi‑stream mux, placeholders, disconnect strategies |
