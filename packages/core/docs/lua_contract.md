@@ -142,8 +142,9 @@ produces a new one.
    - record `previous_status` (for audit/observation);
    - reset `status` to ARGV[3];
    - reset `cancel_requested` to false (the new generation's cancel flag);
-   - clear `result` and `error` — a new generation must not inherit the
-     previous generation's output (v0.1.5);
+   - clear `result`, `error`, `progress` and `cancel_outcome` — a new
+     generation must not inherit the previous generation's output or
+     settle metadata (v0.1.5 / v0.1.6);
    - write `reopened_at` from the server clock;
    - set the primary record's EX per ARGV[4] semantics (explicit / preserve /
      default fallback).

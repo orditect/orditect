@@ -57,6 +57,14 @@ logger = logging.getLogger(__name__)
 # : callable object signature: async def handler(*args, **kwargs) -> Any
 Handler = Callable[..., Awaitable[Any]]
 
+def _retrieve_release_error(task: "asyncio.Task") -> None:
+    """Retrieve exceptions from shielded release tasks (prevents
+    'exception was never retrieved' warnings at GC time)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug(f"Governed release finished with error: {exc}")
 
 class GovernedClient:
     """Global governance client (call-point level resource governance).
@@ -102,6 +110,10 @@ class GovernedClient:
         self.timeout = timeout
         self._budget = budget
         self._cost_fn = cost_fn or (lambda result: 1)
+        # v0.1.6: strong refs for shielded release tasks (mirrors the
+        # executor's _finalize_tasks discipline — an orphaned shield task
+        # must never be GC-collected mid-release).
+        self._release_tasks: set[asyncio.Task] = set()
 
     async def call(
         self,
@@ -181,6 +193,17 @@ class GovernedClient:
             return result
 
         finally:
-            # 7. release resource token (R12: shield prevents second cancellation swallowing release)
+            # 7. release resource token (R12: shield prevents second
+            #    cancellation swallowing release; the inner task is
+            #    strong-referenced so it survives GC — v0.1.6)
             logger.debug(f"GovernedClient releasing: resource={self.resource}")
-            await asyncio.shield(self.governor.release(self.resource, token))
+            await self._shielded_release(token)
+
+    async def _shielded_release(self, token: str) -> None:
+        """Release with shield + strong reference (mirrors executor
+        _shielded_finalize)."""
+        task = asyncio.create_task(self.governor.release(self.resource, token))
+        self._release_tasks.add(task)
+        task.add_done_callback(self._release_tasks.discard)
+        task.add_done_callback(_retrieve_release_error)
+        await asyncio.shield(task)

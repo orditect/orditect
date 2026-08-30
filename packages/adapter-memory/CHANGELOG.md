@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.6] - TBD
+
+### Changed
+- Version alignment with ecosystem (additive only, no behavior change).
+- Dependency floor raised: orditect-protocol>=0.1.6.
+
 ## [0.1.5] - TBD
 
 ### Fixed

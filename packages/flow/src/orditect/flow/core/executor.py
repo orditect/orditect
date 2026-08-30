@@ -349,7 +349,7 @@ class TaskExecutor:
         kwargs.setdefault("governor", self.governor)
 
         token = None
-        inherited = False  # R9/F2：名额是否继承自祖先（豁免时 finally 不释放）
+        inherited = False  # R9/F2: slot inherited from an ancestor (not released in finally)
 
         # register running coroutine (for force cancellation)
         self._running_tasks[task_id] = asyncio.current_task()
@@ -362,6 +362,15 @@ class TaskExecutor:
             if await self._is_cancel_requested(task_id):
                 logger.info(f"Task cancelled before acquire (TOCTOU guard): {task_id}")
                 raise asyncio.CancelledError()
+
+            # F3: reuse short-circuit — an already-succeeded node reuses its prior
+            # result. v0.1.6: evaluated BEFORE acquire and BEFORE the running
+            # write, so a reused node never occupies a semaphore slot and never
+            # leaves the hot record stuck at RUNNING (zombie).
+            reused, reused_result = await self._try_reuse_result(task_id)
+            if reused:
+                logger.info(f"Task reused (short-circuit): {task_id}")
+                return reused_result
 
             # 1. R9/F2 + v0.1.1: exemption check — the snapshot frozen at
             #    registration wins over the live ancestor walk when present.
@@ -394,7 +403,7 @@ class TaskExecutor:
                         resource_name,
                         timeout=self.acquire_timeout,
                     )
-                    # R9-1: resource account registration (for descendant duplicate check)
+                    # R9-1: resource ledger registration (for descendant dedup)
                     try:
                         await self.storage.update_task(
                             task_id,
@@ -402,7 +411,8 @@ class TaskExecutor:
                             validate_status_transfer=False,
                         )
                     except Exception as e:
-                        # account registration failure does not affect execution (descendant degrades to normal acquire, safe default)
+                        # ledger failure does not affect execution (descendants
+                        # degrade to a normal acquire — safe default)
                         logger.warning(
                             f"Resource ledger write failed: {task_id}, error: {e}"
                         )
@@ -415,19 +425,13 @@ class TaskExecutor:
             )
             await self._write_snapshot(task_id, TaskStatus.RUNNING.value, terminal=False)  # F2
 
-            # F3: reuse short-circuit — already-succeeded node reuses prior result
-            reused, reused_result = await self._try_reuse_result(task_id)
-            if reused:
-                logger.info(f"Task reused (short-circuit): {task_id}")
-                return reused_result
-
-            # 3. execute task (R17: timeout determination only recognizes wait expiry)
+            # 3. execute task (R17: only a wait expiry counts as an execution timeout)
             if timeout:
                 result = await self._run_with_timeout(task, task_id, timeout, kwargs)
             else:
                 result = await task.execute(task_id=task_id, **kwargs)
 
-            # 4. 1c: check cancellation flag after task returns
+            # 4. 1c: check the cancel flag after the task returns
             if await self._is_cancel_requested(task_id):
                 await self._settle_cancelled(task_id, "succeeded_but_cancelled")
                 await self._safe_hook(task.on_cancel, task_id)
@@ -465,7 +469,8 @@ class TaskExecutor:
             raise
 
         except Exception as e:
-            # task failure (including business code throwing built-in TimeoutError — goes to this branch, not mislabeled as execution timeout)
+            # task failure (a business TimeoutError also lands here — never
+            # mislabeled as an execution timeout)
             logger.error(f"Task failed: {task_id}, error: {e}", exc_info=True)
             await self._shielded_finalize(
                 self._finalize_failure(task_id, task, e, "failed_but_cancelled")
@@ -473,9 +478,10 @@ class TaskExecutor:
             raise
 
         finally:
-            # restore task context (defensive: context already switched when coroutine force-closed,
-            # resetting old context's token would ValueError — swallow it, correctness unaffected,
-            # contextvar is naturally recycled when coroutine destroyed)
+            # restore task context (defensive: when the coroutine is force-closed
+            # the context has already switched; resetting the old token would
+            # raise ValueError — swallow it, correctness is unaffected since the
+            # contextvar is reclaimed with the coroutine)
             try:
                 current_task_id.reset(_ctx_token)
             except ValueError:
@@ -483,9 +489,10 @@ class TaskExecutor:
             # unregister coroutine tracking
             self._running_tasks.pop(task_id, None)
 
-            # R12: release resource token (shield prevents second cancellation swallowing release;
-            # _shielded_finalize internally handles loop-closed scenario)
-            # R9/F2: inherited quota not released (belongs to ancestor, released by ancestor's finally)
+            # R12: release the resource token (shield so a second cancellation
+            # does not swallow the release; _shielded_finalize handles the
+            # loop-closed case)
+            # R9/F2: an inherited slot is never released here (the ancestor owns it)
             if self.governor and token and not inherited:
                 logger.debug(f"Releasing resource: {resource_name}")
                 await self._shielded_finalize(self.governor.release(resource_name, token))

@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - TBD
+
+### Fixed
+- F3 result-reuse ordering: the reuse short-circuit now runs BEFORE
+  semaphore acquire and BEFORE the running write. A reused node no longer
+  occupies a semaphore slot and no longer leaves the hot record stuck at
+  RUNNING (wait_terminal would time out); on the default core wiring the
+  branch was previously unreachable (Lua terminal protection rejected the
+  running write first). New pins in `test_result_reuse.py`
+  (`TestResultReuseOrdering`).
+- `scan_dependency_cycles` is now iterative — a dependency chain deeper
+  than Python's recursion limit no longer crashes the offline scan (the
+  tool that closes the register-time DFS's depth-bound blind spot). New
+  pins for deep acyclic chains and deep cycles.
+- `terminate` honors `request_cancel` and not-found races — aligned with
+  `cancel`'s sibling semantics (returns False instead of proceeding or
+  leaking TaskNotFoundError). New pins.
+- `charge()` surfaces a rejected quota write explicitly (audit still
+  written; ledgers no longer silently diverge). New pin.
+- `GovernorManager.get_resource_status` tolerates a synchronous `get_limit`
+  (mirrors the stream manager's isawaitable handling). New pin.
+- Shielded release tasks are strong-referenced (GovernedClient,
+  GovernedCallClient) — no orphaned shield task mid-release. New pins.
+
+### Changed
+- `ActionDispatcher` dedup window is bounded (`dedup_capacity`, default
+  10000). Dedup is guaranteed within the window; beyond it a repeated
+  action_id re-executes (documented semantics). New pins.
+- `docs/governance.md`: `rebuild_dep_counters` `skipped_children` signals
+  cold/hot data inconsistency — manual review and re-run required.
+
 ## [0.1.5] - TBD
 
 ### Fixed

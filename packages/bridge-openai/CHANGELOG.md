@@ -1,5 +1,15 @@
 # orditect-bridge-openai Changelog
 
+## [0.1.6] - TBD
+
+### Fixed
+- `_latency_ms` fully removed from the streaming path (C5 completion) —
+  the result holder handed to cost_fn now carries only endpoint vocabulary
+  (usage/model), never internal fields. New pin.
+
+### Changed
+- Dependency floors raised to >=0.1.6 (incl. test extra adapter-memory).
+
 ## [0.1.5] - TBD
 
 ### Fixed

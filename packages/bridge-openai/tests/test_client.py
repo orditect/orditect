@@ -232,3 +232,34 @@ class TestStreaming:
         ev = next(iter(events.values()))
         assert ev.payload["cancelled"] is True
         assert ev.payload["pointer"]["backend"] == "memory"
+
+    async def test_cost_fn_holder_carries_no_internal_fields(self):
+        """v0.1.6 pinning: the result holder handed to cost_fn contains only
+        endpoint vocabulary (usage/model) — never the internal _latency_ms
+        that C5 removed from the non-streaming path.
+
+        Red before: _gen() still injected _latency_ms into result_holder,
+        leaking an internal field into cost_fn's input on the streaming path.
+        """
+        async def handler(request: httpx.Request) -> httpx.Response:
+            lines = [
+                json.dumps({"choices": [{"delta": {"content": "x"}}]}),
+                json.dumps({
+                    "model": "gpt-4o",
+                    "choices": [{"delta": {}}],
+                    "usage": {"total_tokens": 5, "prompt_tokens": 2,
+                              "completion_tokens": 3},
+                }),
+            ]
+            return httpx.Response(
+                200, text=_sse(lines),
+                headers={"Content-Type": "text/event-stream"},
+            )
+
+        store = MemoryStore()
+        seen: list = []
+        client = _make_client(handler, store, cost_fn=lambda r: seen.append(r) or 5)
+        await _drain_stream(client.stream(messages=[{"role": "user", "content": "hi"}]))
+
+        assert seen and "_latency_ms" not in seen[-1]
+        assert set(seen[-1].keys()) <= {"usage", "model"}

@@ -33,7 +33,17 @@ from orditect.core._lua import load_lua
 from orditect.core.errors import AcquireTimeoutError
 from orditect.core.limiter.hooks import LimiterHooks
 from orditect.core.limiter.lease import LeaseGuard
+import logging
+logger = logging.getLogger(__name__)
 
+def _retrieve_hold_release_error(task: "asyncio.Task") -> None:
+    """Retrieve exceptions from shielded hold-release tasks (prevents
+    'exception was never retrieved' warnings at GC time)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug(f"SemaphoreHold release finished with error: {exc}")
 
 @dataclass(frozen=True)
 class LeaseToken:
@@ -276,6 +286,8 @@ class SemaphoreHold:
         self._sem = sem
         self._timeout = timeout
         self._token: LeaseToken | None = None
+        # v0.1.6: strong refs for the shielded release task.
+        self._release_tasks: set[asyncio.Task] = set()
 
     async def __aenter__(self) -> LeaseToken:
         self._token = await self._sem.acquire(timeout=self._timeout)
@@ -283,5 +295,10 @@ class SemaphoreHold:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._token is not None:
-            await asyncio.shield(self._sem.release(self._token))
+            token = self._token
             self._token = None
+            task = asyncio.create_task(self._sem.release(token))
+            self._release_tasks.add(task)
+            task.add_done_callback(self._release_tasks.discard)
+            task.add_done_callback(_retrieve_hold_release_error)
+            await asyncio.shield(task)

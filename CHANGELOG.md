@@ -1,5 +1,213 @@
 # Changelog
 
+## [0.1.6] - TBD
+
+**v0.1.6 = correctness + hygiene release.** No new capabilities — every
+change is a fulfillment of an existing contract promise, or a completion of
+the certification/hygiene layer. Zero assertion flips; all pinning tests are
+additive coverage of previously un-pinned paths.
+
+### Fixed (correctness)
+
+- **flow: F3 result-reuse ordering** — the reuse short-circuit now runs
+  BEFORE semaphore acquire and BEFORE the running write. Previously a reused
+  node (a) occupied a semaphore slot it never needed and (b) left the hot
+  record stuck at RUNNING forever (wait_terminal would time out); on the
+  default core wiring the branch was unreachable (Lua terminal protection
+  rejected the running write first). New pinning tests in
+  `test_result_reuse.py` (`TestResultReuseOrdering`).
+- **flow: `scan_dependency_cycles` is iterative** — the offline cycle scan
+  no longer recurses; a dependency chain deeper than Python's recursion
+  limit (~1000) previously crashed the tool that exists to close the
+  register-time DFS's depth-bound (32) blind spot. New pins for a 3000-deep
+  acyclic chain and a >32-deep cycle.
+- **core: `task_reopen.lua` clears `progress` / `cancel_outcome`** —
+  generation-scoped settle metadata must not leak into a new generation
+  (same rationale as the v0.1.5 result/error clear). `lua_contract.md`
+  updated. New pinning test.
+- **flow: `terminate` honors `request_cancel` and not-found races** —
+  aligned with `cancel`'s sibling semantics: a refused request_cancel or a
+  task vanishing mid-terminate now returns `False` instead of proceeding or
+  leaking `TaskNotFoundError`. New pins.
+- **bridge-openai: `_latency_ms` fully removed from the streaming path** —
+  the result holder handed to cost_fn no longer carries the internal field
+  (C5 completion). New pin.
+- **adapter-ui: query kwargs are strict** — unknown keyword arguments now
+  raise `TypeError` instead of being silently swallowed (T8 spirit); mixed
+  datetime forms (seed datetime objects vs file ISO strings) are normalized
+  so latest-generation folding/sorting stay coherent. New pins.
+- **stream: `StreamResult` deduplicated** — `runner/stream.py` no longer
+  re-defines the dataclass it also imports; executors return the canonical
+  `stream.stream_result.StreamResult` (isinstance-safe across the
+  runner/finalizer boundary). New pin.
+- **flow: `charge()` surfaces a rejected quota write** — a rejected
+  `reserve_units` is logged explicitly (audit still written; ledgers no
+  longer silently diverge). New pin.
+- **flow: `GovernorManager.get_resource_status` tolerates sync `get_limit`**
+  — mirrors the stream manager's `isawaitable` handling. New pin.
+
+### Fixed (hygiene / tooling)
+
+- **scripts/gates: business-neutrality gate double-scan removed** — a
+  duplicated scan block made every finding/advisory appear twice. New meta
+  test (`tests/meta/test_gate_no_duplicates.py`).
+- **protocol: `generate_schemas.py` import order** — the script's own
+  sys.path injection now precedes every orditect import, so it runs on a
+  bare interpreter. New meta test (`tests/meta/test_schema_generator.py`).
+- **stream tests: `integration/__init__.py` no longer holds dead test cases**
+  (pytest never collects them there).
+- **flow/core: shielded release tasks are strong-referenced** — an orphaned
+  shield task is never GC-collected mid-release (GovernedClient,
+  GovernedCallClient, SemaphoreHold, @limited), mirroring the executor's
+  `_finalize_tasks` discipline. New pins.
+
+### Changed (bounded memory)
+
+- **flow: `ActionDispatcher` dedup window is bounded** (`dedup_capacity`,
+  default 10000) — an unbounded `_seen` set leaked memory over the process
+  lifetime. Dedup is guaranteed within the window; beyond it a repeated
+  action_id re-executes (documented semantics). New pins.
+- **adapter-ui: `MemoryActionQueue` receipts are bounded** (`max_receipts`,
+  default 10000) with LRU eviction. New pins.
+
+### Changed (docs)
+
+- `adapter-ui` queue: receipt retention window semantics documented.
+- `flow/docs/governance.md`: `rebuild_dep_counters` `skipped_children`
+  signals cold/hot data inconsistency — manual review and re-run required.
+- stream: `TaskflowResultStore` documents `manifest` as a reserved status
+  word for its task records.
+
+### Meta / verification
+
+- New `tests/meta/` suite: internal dependency floors match package
+  versions (prevents the 0.1.5 floor/metadata drift), schema generator runs
+  bare, gate has no double-scan.
+- All CI gates green; traceability closure OK; schema artifacts up to date.
+
+### Pinning-flip ledger (v0.1.6)
+
+No assertion flips — all pinning tests are additive (previously un-pinned
+paths). The flip ledger for this release is empty.
+```
+
+### 各包 CHANGELOG 补一段 `[0.1.6]`(root CHANGELOG 已涵盖细节，各包只写本包条目）
+
+`packages/flow/CHANGELOG.md` 顶部插入：
+
+```markdown
+## [0.1.6] - TBD
+
+### Fixed
+- F3 result-reuse ordering: reuse now runs before acquire/running-write
+  (no wasted semaphore slot, no zombie RUNNING hot record).
+- `scan_dependency_cycles` is iterative (no RecursionError on deep chains).
+- `terminate` honors `request_cancel` and not-found races (returns False).
+- `charge()` surfaces rejected quota writes explicitly.
+- `GovernorManager.get_resource_status` tolerates sync `get_limit`.
+- Shielded release tasks are strong-referenced (GovernedClient,
+  GovernedCallClient).
+- `ActionDispatcher` dedup window is bounded (`dedup_capacity`).
+
+### Changed
+- `docs/governance.md`: rebuild `skipped_children` manual-review guidance.
+```
+
+`packages/core/CHANGELOG.md` 顶部插入：
+
+```markdown
+## [0.1.6] - TBD
+
+### Fixed
+- `task_reopen.lua` clears `progress` / `cancel_outcome` (generation-scoped
+  settle metadata must not leak into a new generation); `lua_contract.md`
+  updated. New pinning test.
+- Shielded release tasks in `SemaphoreHold` / `@limited` are
+  strong-referenced.
+```
+
+`packages/stream/CHANGELOG.md` 顶部插入：
+
+```markdown
+## [0.1.6] - TBD
+
+### Fixed
+- `StreamResult` deduplicated (runner/stream.py no longer shadows the
+  canonical dataclass).
+- `TaskflowResultStore` documents `manifest` as a reserved status word.
+
+### Changed
+- Dependency floors raised to >=0.1.6.
+```
+
+`packages/protocol/CHANGELOG.md` 顶部插入：
+
+```markdown
+## [0.1.6] - TBD
+
+### Fixed
+- `scripts/generate_schemas.py`: import order — the script's own sys.path
+  injection now precedes orditect imports (runs on a bare interpreter).
+- scripts/gates: business-neutrality gate double-scan removed.
+```
+
+`packages/adapter-ui/CHANGELOG.md` 顶部插入：
+
+```markdown
+## [0.1.6] - TBD
+
+### Fixed
+- Query kwargs are strict (unknown kwargs raise TypeError).
+- Mixed datetime forms normalized (seed objects vs file ISO strings).
+
+### Changed
+- `MemoryActionQueue` receipts are bounded (`max_receipts`, LRU eviction);
+  retention window semantics documented.
+```
+
+`packages/adapter-memory/CHANGELOG.md` / `packages/adapter-local/CHANGELOG.md` 顶部插入：
+
+```markdown
+## [0.1.6] - TBD
+
+### Changed
+- Version alignment with ecosystem (no behavior change).
+```
+
+`packages/bridge-openai/CHANGELOG.md` 顶部插入：
+
+```markdown
+## [0.1.6] - TBD
+
+### Fixed
+- `_latency_ms` fully removed from the streaming path (C5 completion);
+  result holder handed to cost_fn carries only endpoint vocabulary.
+
+### Changed
+- Dependency floors raised to >=0.1.6.
+```
+
+### `flow/docs/governance.md` — `rebuild_dep_counters` 一节补一句
+
+在 `## Offline tools` 的 `stats` 说明处追加：
+
+```markdown
+`skipped_children` lists children whose rebuild was abandoned because a
+parent hot record was missing — this signals cold/hot data inconsistency.
+These children will NOT become ready on their own; review the data and
+re-run the rebuild after reconciling, rather than relying on the counters.
+```
+
+### `stream/src/orditect/stream/adapters/taskflow.py` — `TaskflowResultStore` docstring 补一句
+
+在其类 docstring 末尾追加：
+
+```
+    Reserved status word: the task record's status is set to the reserved
+    word "manifest" (not part of any business state machine). Callers must
+    never drive status transitions on these records — only the manifest
+    field is updated.
+
 ## [0.1.5] - TBD
 
 **v0.1.5 = bugfix + certification-hardening release.** No new capabilities —

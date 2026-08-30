@@ -179,12 +179,6 @@ def main() -> int:
         scan.visit(tree)
         findings.extend(scan.findings)
         advisory.extend(_advisory_docstrings(rel, tree))
-        rel = rel_posix(root, path)
-        tree = parse_python(path)
-        scan = SurfaceScan(rel)
-        scan.visit(tree)
-        findings.extend(scan.findings)
-        advisory.extend(_advisory_docstrings(rel, tree))
 
     for md in sorted((root / str(proto["path"])).rglob("*.md")):
         advisory.extend(_advisory_markdown(root, md))

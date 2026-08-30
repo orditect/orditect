@@ -1,5 +1,19 @@
 # orditect-adapter-ui Changelog
 
+## [0.1.6] - TBD
+
+### Fixed
+- Query kwargs are strict: unknown keyword arguments now raise `TypeError`
+  instead of being silently swallowed (T8 spirit). New pins.
+- Mixed datetime forms are normalized (seed-injected datetime objects vs
+  file-read ISO strings) so latest-generation folding/sorting stay
+  coherent. New pin.
+
+### Changed
+- `MemoryActionQueue` receipts are bounded (`max_receipts`, default 10000)
+  with LRU eviction; retention window semantics documented. New pins.
+- Dependency floors raised to >=0.1.6.
+
 ## [0.1.5] - TBD
 
 ### Fixed

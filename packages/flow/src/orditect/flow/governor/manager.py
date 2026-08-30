@@ -95,7 +95,13 @@ class GovernorManager:
         if self.governor is not None:
             get_limit = getattr(self.governor, "get_limit", None)
             if callable(get_limit):
-                limit = await get_limit(resource)
+                # v0.1.6: get_limit may be sync (e.g. local governors) or
+                # async — handle both via isawaitable, mirroring the stream
+                # StreamGovernorManager (previously a bare await broke sync
+                # implementations with TypeError).
+                limit = get_limit(resource)
+                if inspect.isawaitable(limit):
+                    limit = await limit
                 usage = await self.governor.get_usage(resource)
                 return self._format_status(resource, limit, usage)
 

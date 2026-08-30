@@ -18,6 +18,10 @@ async def scan_dependency_cycles(dep_graph_store: Any) -> list[list[str]]:
     The register-time DFS (line 1) admits a small miss window under
     concurrent registrations; this offline scan closes it. Returns every
     detected cycle as a node list (alarm on non-empty).
+
+    v0.1.6: implemented with an explicit stack instead of recursion —
+    the tool is meant for graphs up to ~100k edges, and a recursive DFS
+    blows past Python's recursion limit on dependency chains of ~1000.
     """
     edges = await dep_graph_store.all_edges()
     children: dict[str, list[str]] = {}
@@ -32,24 +36,37 @@ async def scan_dependency_cycles(dep_graph_store: Any) -> list[list[str]]:
     visited: set[str] = set()  # proven acyclic (memoized)
     in_stack: set[str] = set()
 
-    def walk(node: str, path: list[str]) -> None:
-        if node in in_stack:
-            cycle = path[path.index(node):] + [node]
-            canonical = tuple(sorted(set(cycle)))
-            if canonical not in seen_cycles:
-                seen_cycles.add(canonical)
-                cycles.append(cycle)
-            return
-        if node in visited:
-            return
-        in_stack.add(node)
-        for parent in children.get(node, []):
-            walk(parent, path + [parent])
-        in_stack.discard(node)
-        visited.add(node)
-
-    for node in sorted(nodes):
-        walk(node, [node])
+    for root in sorted(nodes):
+        if root in visited:
+            continue
+        in_stack.add(root)
+        # stack frames: (node, path_including_node, parent_iterator)
+        stack: list[tuple[str, list[str], Any]] = [
+            (root, [root], iter(children.get(root, [])))
+        ]
+        while stack:
+            node, path, parents_iter = stack[-1]
+            advanced = False
+            for parent in parents_iter:
+                if parent in in_stack:
+                    cycle = path[path.index(parent):] + [parent]
+                    canonical = tuple(sorted(set(cycle)))
+                    if canonical not in seen_cycles:
+                        seen_cycles.add(canonical)
+                        cycles.append(cycle)
+                    continue
+                if parent in visited:
+                    continue
+                in_stack.add(parent)
+                stack.append(
+                    (parent, path + [parent], iter(children.get(parent, [])))
+                )
+                advanced = True
+                break
+            if not advanced:
+                stack.pop()
+                in_stack.discard(node)
+                visited.add(node)
     return cycles
 
 

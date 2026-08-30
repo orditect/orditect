@@ -142,3 +142,92 @@ class TestResultReuse:
         result = await executor.execute(task_id="t1", task=task)
         assert result == {"computed": 1}
         assert task.exec_count == 1
+
+class SpyGovernor:
+    """Records acquire/release calls (proves the reuse path never touches
+    the semaphore)."""
+
+    def __init__(self):
+        self.acquired: list[str] = []
+        self.released: list[str] = []
+
+    async def acquire(self, resource: str, timeout: Optional[float] = None) -> str:
+        self.acquired.append(resource)
+        return f"spy-token-{len(self.acquired)}"
+
+    async def try_acquire(self, resource: str):
+        return await self.acquire(resource)
+
+    async def release(self, resource: str, token: str) -> None:
+        self.released.append(resource)
+
+    async def get_usage(self, resource: str) -> int:
+        return 0
+
+
+@pytest.mark.unit
+class TestResultReuseOrdering:
+    """v0.1.6 pinning: the F3 reuse check runs BEFORE acquire and BEFORE the
+    running write.
+
+    Red before: with the check placed after the running write, a reused node
+    (a) acquired a semaphore slot it never needed, and (b) left the hot
+    record stuck at RUNNING forever (wait_terminal would time out).
+    """
+
+    async def test_reuse_never_acquires_governor(self):
+        storage = FakeStorage()
+        await storage.initialize_task("t1", "pending")
+        await storage.update_task("t1", {"result": {"cached": True}})
+
+        governor = SpyGovernor()
+        task = CountingTask(storage)
+        executor = TaskExecutor(
+            storage, governor=governor,
+            snapshot_query=StubQuery(status="succeeded"),
+            reuse_terminal_words=frozenset({"succeeded"}),
+        )
+        result = await executor.execute(task_id="t1", task=task)
+
+        assert result == {"cached": True}
+        assert task.exec_count == 0
+        assert governor.acquired == []
+        assert governor.released == []
+
+    async def test_reuse_does_not_write_running_status(self):
+        storage = FakeStorage()
+        await storage.initialize_task("t1", "pending")
+        await storage.update_task("t1", {"result": {"cached": True}})
+
+        task = CountingTask(storage)
+        executor = TaskExecutor(
+            storage, governor=None,
+            snapshot_query=StubQuery(status="succeeded"),
+            reuse_terminal_words=frozenset({"succeeded"}),
+        )
+        await executor.execute(task_id="t1", task=task)
+
+        stored = await storage.get_task("t1")
+        # The reuse path must not leave the hot record stuck at running.
+        assert stored["status"] == "pending"
+
+    async def test_non_reused_node_still_acquires_and_settles(self):
+        """Regression: a node that does NOT hit reuse still acquires and
+        settles normally (the order change must not disturb the main path)."""
+        storage = FakeStorage()
+        await storage.initialize_task("t1", "pending")
+
+        governor = SpyGovernor()
+        task = CountingTask(storage)
+        executor = TaskExecutor(
+            storage, governor=governor,
+            snapshot_query=StubQuery(status=None),
+            reuse_terminal_words=frozenset({"succeeded"}),
+        )
+        result = await executor.execute(task_id="t1", task=task)
+
+        assert result == {"computed": 1}
+        assert governor.acquired == ["task_execution"]
+        assert governor.released == ["task_execution"]
+        stored = await storage.get_task("t1")
+        assert stored["status"] == "succeeded"

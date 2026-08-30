@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orditect-bridge-openai"
-version = "0.1.5"
+version = "0.1.6"
 description = "OpenAI-compatible endpoint bridge for the Orditect ecosystem: governed LLM calls with audit, budget, and observability (bridge reference implementation)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,16 +20,16 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.27.0",
-    "orditect-protocol>=0.1.5,<0.2",
-    "orditect-core>=0.1.5,<0.2",
-    "orditect-flow>=0.1.5,<0.2",
+    "orditect-protocol>=0.1.6,<0.2",
+    "orditect-core>=0.1.6,<0.2",
+    "orditect-flow>=0.1.6,<0.2",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.26",
-    "orditect-adapter-memory>=0.1.4,<0.2",
+    "orditect-adapter-memory>=0.1.6,<0.2",
 ]
 
 [tool.setuptools.packages.find]

@@ -79,8 +79,18 @@ def limited(
                 try:
                     return await func(*args, **kwargs)
                 finally:
-                    # shield prevents CancelledError from swallowing release (D3 fix)
-                    await asyncio.shield(limiter.release(token))
+                    # shield prevents CancelledError from swallowing release
+                    # (D3 fix); the inner task is strong-referenced so it
+                    # survives GC (v0.1.6).
+                    release_task = asyncio.create_task(limiter.release(token))
+                    try:
+                        await asyncio.shield(release_task)
+                    finally:
+                        # The task object is referenced by the shield awaiter
+                        # and this frame; retrieving its exception silences
+                        # 'exception was never retrieved' warnings.
+                        if release_task.done() and not release_task.cancelled():
+                            release_task.exception()
 
             else:  # bucket
                 limiter = registry.get_bucket(resource)

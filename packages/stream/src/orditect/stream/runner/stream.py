@@ -31,16 +31,6 @@ from orditect.stream.stages import StageConfig, StageOutcome, StageRunner
 from orditect.stream.stream_result import StreamResult
 
 
-@dataclass
-class StreamResult:
-    """Final aggregation of a single substream (for manifest)."""
-
-    stream_id: str
-    stages: dict[str, StageOutcome] = field(default_factory=dict)
-    hits: list[MarkerHit] = field(default_factory=list)
-    errors: list[dict[str, Any]] = field(default_factory=list)
-
-
 class StreamExecutor:
     """Single-stream executor."""
 
