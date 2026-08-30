@@ -201,8 +201,18 @@ class GovernedClient:
 
     async def _shielded_release(self, token: str) -> None:
         """Release with shield + strong reference (mirrors executor
-        _shielded_finalize)."""
-        task = asyncio.create_task(self.governor.release(self.resource, token))
+        _shielded_finalize), with a RuntimeError fallback for
+        loop-teardown windows (v0.1.7): close the coroutine (no
+        'never awaited' leak), log, and skip the release."""
+        release_coro = self.governor.release(self.resource, token)
+        try:
+            task = asyncio.create_task(release_coro)
+        except RuntimeError:
+            release_coro.close()
+            logger.warning(
+                "release skipped: no running event loop (teardown phase)"
+            )
+            return
         self._release_tasks.add(task)
         task.add_done_callback(self._release_tasks.discard)
         task.add_done_callback(_retrieve_release_error)

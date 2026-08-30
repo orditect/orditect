@@ -125,7 +125,8 @@ class StreamRunner:
 
     @property
     def should_buffer(self) -> bool:
-        return self._monitor.should_buffer()
+        # DisconnectMonitor.should_buffer is a bool property, not a method.
+        return self._monitor.should_buffer
 
     @property
     def grace_buffer(self) -> GraceBuffer:
@@ -173,8 +174,23 @@ class StreamRunner:
         reason = reason or "cancelled by user"
         partials: dict[str, str] = {}
 
-        # target stream set (single or all)
-        target_sids = [stream_id] if stream_id else list(self._cancel_tokens.keys())
+        # Target stream set (single or all). A cancel against an unknown
+        # stream_id is ignored (v0.1.7, adjudicated #13): no phantom
+        # cancelled event may be injected for a stream that was never
+        # registered — the cancelled frame would otherwise be emitted for a
+        # non-existent stream_id and confuse consumers.
+        if stream_id is not None:
+            target_sids = (
+                [stream_id] if stream_id in self._cancel_tokens else []
+            )
+            if not target_sids:
+                logger.warning(
+                    f"cancel ignored: unknown stream_id {stream_id!r} "
+                    f"(never registered or already finished)"
+                )
+                return partials
+        else:
+            target_sids = list(self._cancel_tokens.keys())
 
         for sid in target_sids:
             # 1. collect partial first (synchronous read, always succeeds, unaffected by subsequent exceptions)
@@ -182,7 +198,7 @@ class StreamRunner:
 
             # 2. cancel token (synchronous operation, always succeeds)
             token = self._cancel_tokens.get(sid)
-            if token:
+            if token is not None:  # always true after the #13 filter; kept defensive
                 token.cancel(reason)
 
             # 3. attempt to deliver event (exception isolated — mux closed/full etc. does not affect partials return)

@@ -297,7 +297,19 @@ class SemaphoreHold:
         if self._token is not None:
             token = self._token
             self._token = None
-            task = asyncio.create_task(self._sem.release(token))
+            # shield so a cancellation landing on __aexit__ does not swallow
+            # the release; the task is strong-referenced (v0.1.6) and the
+            # RuntimeError fallback covers loop-teardown windows (v0.1.7,
+            # aligned with the executor's discipline).
+            release_coro = self._sem.release(token)
+            try:
+                task = asyncio.create_task(release_coro)
+            except RuntimeError:
+                release_coro.close()
+                logger.warning(
+                    "release skipped: no running event loop (teardown phase)"
+                )
+                return
             self._release_tasks.add(task)
             task.add_done_callback(self._release_tasks.discard)
             task.add_done_callback(_retrieve_hold_release_error)

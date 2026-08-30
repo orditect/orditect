@@ -155,6 +155,21 @@ def _advisory_markdown(root: Path, path: Path) -> list[str]:
             hits.append(f"{rel}:{lineno}: [markdown] {match.group(0)!r}")
     return hits
 
+def _scan_file(root: Path, path: Path) -> tuple[list[str], list[str]]:
+    """Scan one protocol source file at the gate positions (G1/G2/G3) plus
+    the advisory docstring positions.
+
+    Returns (findings, advisory). This is the single per-file scan path
+    shared by main()'s aggregation loop and by the no-duplicates meta test;
+    extracting it prevents any drift between the gate's real aggregation
+    and the test's re-implementation (v0.1.7, meta issue #6).
+    """
+    rel = rel_posix(root, path)
+    tree = parse_python(path)
+    scan = SurfaceScan(rel)
+    scan.visit(tree)
+    return list(scan.findings), _advisory_docstrings(rel, tree)
+
 
 def main() -> int:
     root = repo_root()
@@ -173,12 +188,9 @@ def main() -> int:
             # rules/ is a data-rule toolkit (M4) — neither is contract
             # surface (same rationale as the api-surface gate).
             continue
-        rel = rel_posix(root, path)
-        tree = parse_python(path)
-        scan = SurfaceScan(rel)
-        scan.visit(tree)
-        findings.extend(scan.findings)
-        advisory.extend(_advisory_docstrings(rel, tree))
+        file_findings, file_advisory = _scan_file(root, path)
+        findings.extend(file_findings)
+        advisory.extend(file_advisory)
 
     for md in sorted((root / str(proto["path"])).rglob("*.md")):
         advisory.extend(_advisory_markdown(root, md))

@@ -1,5 +1,34 @@
 # Contributing
 
+## Concurrency-primitive change discipline
+
+Changes to concurrency primitives (heartbeat scheduling, backpressure,
+cancellation cascades, shielded release) follow the same two-person review
+discipline as the Lua transition window: single-reviewer blind spots in
+this area are systemic (v0.1.7 SSE heartbeat postmortem: four independent
+defects hid behind one symptom).
+
+Before writing the fix, the PR description must answer the structural
+question: **who blocks whom during the failure window?** A fix that
+schedules work on top of the very wait that is blocked during the failure
+cannot work (the pre-fix heartbeat awaited the runner's next event, which
+is exactly what never arrives during a quiet period).
+
+## Pinning-test authoring principles
+
+- Pin the seam, not the coincidence: assert at the mechanism boundary
+  (frame bytes, merged-queue output, fold results), never at
+  timing-dependent intermediate states (backpressure windows, gated emits,
+  scheduler races).
+- Verify atomic facts before assembling scenarios: when a pin fails
+  repeatedly, reduce the scenario to the smallest observable fact (what do
+  the frame bytes actually look like? what type does this API actually
+  accept?). If the reduced fact is wrong, the implementation is wrong —
+  stop adjusting the test.
+- A pin failing in setup is still doing its job: the v0.1.7 pins found
+  four latent defects by failing for the "wrong" reason before the
+  "right" reason could even be reached.
+
 ## Gate discipline (v0.1.2+)
 
 v0.1.1's diff-based freeze gate (`scripts/check_v011_frozen.py`) is retired.

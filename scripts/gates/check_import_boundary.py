@@ -53,6 +53,13 @@ def _normalize_dist(name: str) -> str:
     """Normalize a distribution name (PEP 503-ish, lowercase)."""
     return name.strip().lower().replace("_", "-")
 
+def _internal_distribution(target: str) -> str:
+    """Map an orditect namespace portion to its distribution name.
+
+    "orditect.stream" -> "orditect-stream";
+    "orditect.adapter.memory" -> "orditect-adapter-memory".
+    """
+    return "orditect-" + target.split(".", 1)[1].replace(".", "-")
 
 def _declared_third_party(pyproject: Path) -> frozenset[str]:
     """Third-party distribution names declared in one package's pyproject."""
@@ -149,13 +156,27 @@ def main() -> int:
                         f"(package {pkg_name!r} must not import business packages)"
                     )
                 elif category == "internal":
-                    if target == namespace or target in allowed_internal:
+                    if target != namespace and target not in allowed_internal:
+                        findings.append(
+                            f"{rel}:{lineno}: [internal import] {dotted!r} "
+                            f"(package {pkg_name!r} may only import "
+                            f"{sorted(allowed_internal | {namespace})})"
+                        )
                         continue
-                    findings.append(
-                        f"{rel}:{lineno}: [internal import] {dotted!r} "
-                        f"(package {pkg_name!r} may only import "
-                        f"{sorted(allowed_internal | {namespace})})"
-                    )
+                    if target != namespace:
+                        # Packaging guard (v0.1.7): a legal internal import must
+                        # also be declared as a distribution dependency in
+                        # pyproject.toml, or the package breaks with
+                        # ModuleNotFoundError when installed standalone.
+                        dist = _normalize_dist(_internal_distribution(target))
+                        if dist not in declared:
+                            findings.append(
+                                f"{rel}:{lineno}: [undeclared internal "
+                                f"dependency] {dotted!r} (package {pkg_name!r} "
+                                f"imports {target!r} but does not declare "
+                                f"{_internal_distribution(target)!r} in "
+                                f"pyproject.toml)"
+                            )
                 elif category == "third_party":
                     dist = _IMPORT_TO_DIST.get(target, target)
                     if _normalize_dist(dist) not in declared:

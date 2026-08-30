@@ -27,6 +27,23 @@ from typing import Literal, Optional
 from orditect.core.errors import AcquireTimeoutError
 from orditect.core.limiter.registry import get_registry
 
+import logging
+logger = logging.getLogger(__name__)
+
+#: Strong references for shielded release tasks created by @limited wrappers
+#: (module-level: the decorator's wrapper has no owning instance to hold
+#: them). An orphaned shield task must never be GC-collected mid-release.
+_release_tasks: set[asyncio.Task] = set()
+
+
+def _retrieve_release_error(task: "asyncio.Task") -> None:
+    """Retrieve exceptions from shielded release tasks (prevents
+    'exception was never retrieved' warnings at GC time)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug(f"@limited release finished with error: {exc}")
 
 def limited(
     resource: str,
@@ -79,18 +96,26 @@ def limited(
                 try:
                     return await func(*args, **kwargs)
                 finally:
-                    # shield prevents CancelledError from swallowing release
-                    # (D3 fix); the inner task is strong-referenced so it
-                    # survives GC (v0.1.6).
-                    release_task = asyncio.create_task(limiter.release(token))
+                    # R12: shield prevents a second cancellation from
+                    # swallowing the release; the task is strong-referenced
+                    # so it survives GC even when the shield await is itself
+                    # interrupted, with a RuntimeError fallback for
+                    # loop-teardown windows (v0.1.7 — mirrors the executor's
+                    # _shielded_finalize discipline).
+                    release_coro = limiter.release(token)
                     try:
+                        release_task = asyncio.create_task(release_coro)
+                    except RuntimeError:
+                        release_coro.close()
+                        logger.warning(
+                            "release skipped: no running event loop "
+                            "(teardown phase)"
+                        )
+                    else:
+                        _release_tasks.add(release_task)
+                        release_task.add_done_callback(_release_tasks.discard)
+                        release_task.add_done_callback(_retrieve_release_error)
                         await asyncio.shield(release_task)
-                    finally:
-                        # The task object is referenced by the shield awaiter
-                        # and this frame; retrieving its exception silences
-                        # 'exception was never retrieved' warnings.
-                        if release_task.done() and not release_task.cancelled():
-                            release_task.exception()
 
             else:  # bucket
                 limiter = registry.get_bucket(resource)

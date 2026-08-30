@@ -35,6 +35,12 @@ class ActionDispatcher:
         orchestrator: TaskOrchestrator (for cancel / terminate).
         recovery: RecoveryService (for resume / rerun).
         poll_interval: seconds between queue polls when empty.
+        At-most-once semantics (adjudicated v0.1.7, #12): an action_id is marked
+        seen BEFORE execution, so a failed action is NOT retried on re-delivery
+        within the dedup window — at-most-once, not at-least-once. Producers
+        needing guaranteed execution must use a persistent queue with explicit
+        retry; the bounded in-memory dedup window is a best-effort dedup, not a
+        delivery guarantee.
     """
 
     def __init__(

@@ -231,3 +231,61 @@ class TestResultReuseOrdering:
         assert governor.released == ["task_execution"]
         stored = await storage.get_task("t1")
         assert stored["status"] == "succeeded"
+
+@pytest.mark.unit
+class TestNoneResultReuse:
+    """v0.1.7 pinning (adjudicated #11): executor and recovery agree on
+    None-result reuse (key presence, not non-None) for side-effect tasks.
+
+    Red before: RecoveryService.decide used `rec.get("result") is not None`,
+    so a side-effect task (returns None) was reused by the executor but
+    rerun forever by recovery — the two rules disagreed.
+    """
+
+    async def test_executor_reuses_none_result(self):
+        storage = FakeStorage()
+        await storage.initialize_task("t_none", "pending")
+        await storage.update_task("t_none", {"result": None})  # side-effect task done
+
+        task = CountingTask(storage)
+        executor = TaskExecutor(
+            storage, governor=None,
+            snapshot_query=StubQuery(status="succeeded"),
+            reuse_terminal_words=frozenset({"succeeded"}),
+        )
+        result = await executor.execute(task_id="t_none", task=task)
+        assert result is None
+        assert task.exec_count == 0  # reused, not re-executed
+
+    async def test_recovery_reuses_none_result(self):
+        from orditect.flow.recovery import RecoveryService, ReuseDecision
+
+        storage = FakeStorage()
+        await storage.initialize_task("t_none", "pending")
+        await storage.update_task("t_none", {"result": None})
+
+        class _Reader:
+            async def get(self, task_id, step="execute"):
+                class S:
+                    status = "succeeded"
+                return S()
+
+            async def get_tree(self, root, **kw):
+                return []
+
+        svc = RecoveryService(
+            storage, _Reader(), executor=None,
+            reuse_terminal_words=frozenset({"succeeded"}),
+            task_factory=None,
+        ) if False else None
+        # decide() is the adjudicated seam; drive it directly without a
+        # full RecoveryService construction (executor/factory not needed
+        # for a REUSE decision).
+        from orditect.flow.recovery.service import RecoveryService as _RS
+        svc = _RS.__new__(_RS)
+        svc._storage = storage
+        svc._reader = _Reader()
+        svc._reuse_words = frozenset({"succeeded"})
+
+        decision = await svc.decide("t_none")
+        assert decision is ReuseDecision.REUSE

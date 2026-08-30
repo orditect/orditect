@@ -232,15 +232,15 @@ class GovernedCallClient:
     # ---------- streaming ----------
 
     async def call_streaming(
-        self,
-        *args,
-        handler: Callable[..., AsyncIterator] | None = None,
-        payload_fn: PayloadFn | None = None,
-        result_fn: ResultFn | None = None,
-        partial_fn: PartialFn | None = None,
-        cancel_token: Any = None,
-        call_id: str | None = None,
-        **kwargs,
+            self,
+            *args,
+            handler: Callable[..., AsyncIterator] | None = None,
+            payload_fn: PayloadFn | None = None,
+            result_fn: ResultFn | None = None,
+            partial_fn: PartialFn | None = None,
+            cancel_token: Any = None,
+            call_id: str | None = None,
+            **kwargs,
     ) -> AsyncIterator[Any]:
         """One governed streaming call as an async generator.
 
@@ -255,6 +255,10 @@ class GovernedCallClient:
           charging happens only on normal completion, mirroring call().
         - On cancellation (caller break / aclose / task cancel), partial_fn()
           bytes are pointer-ized and the audit record is marked cancelled.
+        - The handler's generator is deterministically closed (aclose
+          cascade, v0.1.7): async-for never acloses inner iterators, so
+          inner resources (e.g. an HTTP stream) would otherwise be left to
+          GC timing.
 
         Note: as an async generator, validation and the governance prologue
         run on first iteration, not at call time.
@@ -281,8 +285,10 @@ class GovernedCallClient:
         error: BaseException | None = None
         result: Any = None
         cost: int | None = None  # only computed on normal completion
+        gen = None
         try:
-            async for chunk in fn(*args, **kwargs):
+            gen = fn(*args, **kwargs)
+            async for chunk in gen:
                 yield chunk
             if result_fn is not None:
                 result = result_fn()
@@ -304,6 +310,18 @@ class GovernedCallClient:
             error = e
             raise
         finally:
+            # v0.1.7: deterministically close the handler's generator so its
+            # finally chain (e.g. an httpx stream's connection cleanup) runs
+            # now, not at GC time.
+            if gen is not None:
+                aclose = getattr(gen, "aclose", None)
+                if aclose is not None:
+                    try:
+                        await aclose()
+                    except Exception as e:
+                        logger.debug(
+                            f"handler stream aclose failed (ignored): {e}"
+                        )
             pointer_data: bytes | None = None
             if cancelled and partial_fn is not None:
                 try:

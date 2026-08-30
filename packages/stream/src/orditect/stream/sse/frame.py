@@ -32,8 +32,10 @@ class SSEFrame:
         """Encode to standard SSE byte stream."""
         lines: list[str] = []
         if self.comment is not None:
+            # Comment frames: each line is emitted as ":<line>" with no
+            # extra space, preserving the comment text verbatim.
             for line in self.comment.splitlines() or [""]:
-                lines.append(f":{line}" if line else ":")
+                lines.append(f":{line}")
             return ("\n".join(lines) + "\n\n").encode("utf-8")
 
         if self.id is not None:
@@ -60,9 +62,10 @@ def frame_from_envelope(envelope: EventEnvelope, event_type: EventType) -> SSEFr
 
 
 def heartbeat_frame() -> SSEFrame:
-    """Heartbeat comment frame: prevents proxy buffer timeout, not part of business event stream."""
-    return SSEFrame(event="", data="", comment=HEARTBEAT_COMMENT)
-
+    """Heartbeat comment frame. Normalized to ":ping" (no leading space),
+    the conventional SSE comment form, so producers and consumers share one
+    stable, recognizable shape."""
+    return SSEFrame(event="", data="", comment="ping")
 
 def encode_envelope(envelope: EventEnvelope, event_type: EventType) -> bytes:
     return frame_from_envelope(envelope, event_type).encode()

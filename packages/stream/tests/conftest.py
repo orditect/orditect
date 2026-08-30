@@ -5,6 +5,17 @@ from pathlib import Path
 # ensure src/ is in sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+# stream tests also need sibling package sources on a fresh clone (no
+# pip-installed packages): unit tests import orditect.adapter.memory
+# (result-store adapter) and orditect.core / orditect.flow / orditect.protocol
+# transitively. Mirrors the per-package conftest pattern used by
+# bridge-openai / adapter-ui (v0.1.7, issue #7).
+_REPO = Path(__file__).resolve().parents[3]
+for _pkg in ("core", "flow", "protocol", "adapter-memory"):
+    _src = _REPO / "packages" / _pkg / "src"
+    if _src.is_dir() and str(_src) not in sys.path:
+        sys.path.insert(0, str(_src))
+
 import os
 import pytest
 import redis.asyncio as aioredis
