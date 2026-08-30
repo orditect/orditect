@@ -142,6 +142,8 @@ produces a new one.
    - record `previous_status` (for audit/observation);
    - reset `status` to ARGV[3];
    - reset `cancel_requested` to false (the new generation's cancel flag);
+   - clear `result` and `error` — a new generation must not inherit the
+     previous generation's output (v0.1.5);
    - write `reopened_at` from the server clock;
    - set the primary record's EX per ARGV[4] semantics (explicit / preserve /
      default fallback).
@@ -263,7 +265,13 @@ lifecycle.
 - `{"ok": false, "reason": "invalid_units"/"invalid_max_units", ...}` bad args
 
 **Semantics**:
-- Reap expired leases (ZSET score < now - ttl_ms) before any decision.
+- Reap expired leases (ZSET score < now - ttl_ms) before any decision; the
+  reaping pass only touches `pending_key` when it exists (writing into a
+  dead key would suppress the rebuild logic below).
+- When `pending_key` is dead but leases survive, the counter is rebuilt
+  from the surviving leases before the quota check (the reaping pass has
+  already run, so the surviving leases are the single source of truth);
+  this applies to both the renewal and the fresh-reserve paths.
 - `units=0` is legal (ledger-open semantics: register a lease slot without
   consuming quota; consumed by flow's BudgetLedger.open()). `units<0` returns
   invalid_units.
@@ -283,6 +291,27 @@ lifecycle.
   the surviving leases (ZRANGE + HGET sum — the reaping pass above already
   ran, so ZRANGE yields exactly the un-expired leases, the single source of
   truth) and set `EX leases_ttl`.
+- Idempotent hit (already_reserved): refreshes the lease score and key TTLs —
+  a retry IS a renewal, preventing a long-running retried task from being
+  reaped as crashed.
+- **The renewal must also keep `pending_key` alive for at least as long as the
+  renewed lease**. A renewal chain (>= 2 renewals, each within task_ttl of the
+  previous) can push the lease's logical lifetime (score + task_ttl) beyond
+  `pending_key`'s fallback TTL (set at first reserve). If `pending_key` dies
+  while a live lease remains, the lease's units evaporate from the counter and
+  a later reserve over-admits. Therefore, in the idempotent branch: when
+  `pending_key` exists, bump its TTL; when it is already dead, rebuild it from
+  the surviving leases (ZRANGE + HGET sum — the reaping pass above already
+  ran, so ZRANGE yields exactly the un-expired leases, the single source of
+  truth) and set `EX leases_ttl`.
+  **Reaping window semantics (precision note)**: the reaping pass expires a
+  lease when `score < now_ms - ttl_ms`, where `ttl_ms` comes from THE
+  CURRENT CALL's `task_ttl_sec` — not from each lease's own registration
+  ttl. The window is uniform across all leases in a scope: a lease is
+  considered alive iff it was (re)registered within the current caller's
+  declared ttl. Callers must therefore use a consistent `task_ttl_sec`
+  across all calls sharing a scope; mixing a long-ttl registration with a
+  short-ttl call will reap leases the caller may have expected to survive.
 
 ## quota_release.lua — quota release
 
@@ -292,18 +321,23 @@ lifecycle.
 
 **ARGV**:
 - ARGV[1]: task_id
-
-**Returns** (cjson):
-- `{"ok": true, "reason": "", "current": N, "released": M}` success
-- `{"ok": true, "reason": "not_reserved", ...}` idempotent (never reserved)
+- ARGV[2]: fallback_ttl_seconds (applied when pending_key would otherwise
+  become eternal; the release side does not know the original task_ttl, so
+  the caller passes a safe default — currently default_expire_time)
 
 **Semantics**:
 - SET clears any existing TTL, so the release path reads the TTL first and
   restores it, preserving `pending_key`'s fallback expiry (paired with the
   reserve path's bump).
-- When the counter reaches 0 and the key has no TTL, `pending_key` is `DEL`ed
-  instead of being SET to `"0"` — an eternal "0" key is pure residue with no
-  semantic value.
+- TTL reads integer seconds, so a key in its final second reports pttl=0;
+  in that case (or when the key never had a TTL) the fallback TTL from
+  ARGV[2] is applied — a partial release must never leave an eternal
+  non-zero counter.
+- When the counter reaches 0 and the key has no TTL, `pending_key` is
+  `DEL`ed instead of being SET to `"0"` — an eternal "0" key is pure
+  residue with no semantic value.
+
+
 
 ## json_merge.lua — generic atomic JSON merge
 

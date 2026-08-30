@@ -27,22 +27,22 @@ def _snap(tid, step, eid, status="", parent=None):
 class TestTerminalFolding:
     async def test_save_terminal_then_conflicting_resave_rejected(self, tmp_path):
         store = LocalFileStore(tmp_path)
-        await store.snapshot.save_terminal(_snap("t", "s", "e1", "done"))
+        await store.snapshot.save_terminal(_snap("t", "s", "e1", status="done"))
         with pytest.raises(TerminalStateViolationError):
-            await store.snapshot.save_terminal(_snap("t", "s", "e1", "other"))
+            await store.snapshot.save_terminal(_snap("t", "s", "e1", status="other"))
 
     async def test_save_terminal_identical_resave_dedups(self, tmp_path):
         store = LocalFileStore(tmp_path)
-        await store.snapshot.save_terminal(_snap("t", "s", "e1", "done"))
-        await store.snapshot.save_terminal(_snap("t", "s", "e1", "done"))
+        await store.snapshot.save_terminal(_snap("t", "s", "e1", status="done"))
+        await store.snapshot.save_terminal(_snap("t", "s", "e1", status="done"))
         rows = (tmp_path / "snapshots.ndjson").read_text().strip().splitlines()
         assert len(rows) == 1  # T4: identical re-save is a silent dedup
 
     async def test_non_state_merge_into_terminal_generation(self, tmp_path):
         """T3: status never merges; non-state fields may complete the record."""
         store = LocalFileStore(tmp_path)
-        await store.snapshot.save_terminal(_snap("t", "s", "e1", "done"))
-        merged = _snap("t", "s", "e1", "done").model_copy(
+        await store.snapshot.save_terminal(_snap("t", "s", "e1", status="done"))
+        merged = _snap("t", "s", "e1", status="done").model_copy(
             update={"cost": {"usd": 0.1}}
         )
         await store.snapshot.save(merged)  # same status, new cost: allowed
@@ -56,20 +56,59 @@ class TestTerminalFolding:
         erase previously recorded non-state fields."""
         store = LocalFileStore(tmp_path)
         await store.snapshot.save(
-            _snap("t", "s", "e1", "running").model_copy(
+            _snap("t", "s", "e1", status="running").model_copy(
                 update={"cost": {"usd": 0.5}}
             )
         )
         await store.snapshot.save_terminal(
-            _snap("t", "s", "e1", "done").model_copy(
+            _snap("t", "s", "e1", status="done").model_copy(
                 update={"cost": {"usd": 0.5}}
             )
         )
-        await store.snapshot.save(_snap("t", "s", "e1", "done"))  # sparse
+        await store.snapshot.save(
+            _snap("t", "s", "e1", status="done")
+        )  # sparse
 
         got = await store.snapshot.get("t", "s")
         assert got is not None
         assert got.cost == {"usd": 0.5}
+
+    async def test_sparse_save_without_status_preserves_record(self, tmp_path):
+        """CF-SNP-014 mirror (v0.1.5): empty-status sparse saves never
+        regress status, never drift created_at, still merge fields."""
+        store = LocalFileStore(tmp_path)
+        first = _snap("t", "s", "e1", status="running").model_copy(
+            update={"cost": {"usd": 0.1}}
+        )
+        await store.snapshot.save(first)
+        sparse = _snap("t", "s", "e1").model_copy(
+            update={"status": "", "error": "boom"}
+        )
+        await store.snapshot.save(sparse)
+
+        got = await store.snapshot.get("t", "s")
+        assert got is not None
+        assert got.status == "running"
+        assert got.cost == {"usd": 0.1}
+        assert got.error == "boom"
+        assert got.created_at == first.created_at
+
+    async def test_statusless_save_after_terminal_is_legal(self, tmp_path):
+        store = LocalFileStore(tmp_path)
+        await store.snapshot.save_terminal(
+            _snap("t", "s", "e1", status="done").model_copy(
+                update={"cost": {"usd": 0.1}}
+            )
+        )
+        sparse = _snap("t", "s", "e1").model_copy(
+            update={"status": "", "model": "m1"}
+        )
+        await store.snapshot.save(sparse)
+
+        got = await store.snapshot.get("t", "s")
+        assert got is not None
+        assert got.status == "done"
+        assert got.model == "m1"
 
 class TestIdempotency:
     async def test_audit_conflict(self, tmp_path):
@@ -126,6 +165,33 @@ class TestTraceBundleForm:
         report = run_rules(lines)
         assert report.ok, report.summary()
 
+class TestExpireAtSort:
+    """CF-SNP-015 mirror (v0.1.5): no-expiry sorts as infinitely far."""
+
+    async def test_query_sort_by_expire_at(self, tmp_path):
+        from datetime import UTC, datetime, timedelta
+        from orditect.protocol import Sort, SortDirection
+
+        store = LocalFileStore(tmp_path)
+        future = datetime.now(UTC) + timedelta(hours=1)
+        near = datetime.now(UTC) + timedelta(minutes=1)
+        await store.snapshot.save(
+            _snap("a", "s", "e1").model_copy(update={"expire_at": future})
+        )
+        await store.snapshot.save(
+            _snap("b", "s", "e1").model_copy(update={"expire_at": near})
+        )
+        await store.snapshot.save(_snap("c", "s", "e1"))
+
+        asc = await store.snapshot.query(
+            sort=Sort(field="expire_at", direction=SortDirection.ASC)
+        )
+        assert [s.task_id for s in asc] == ["b", "a", "c"]
+
+        desc = await store.snapshot.query(
+            sort=Sort(field="expire_at", direction=SortDirection.DESC)
+        )
+        assert [s.task_id for s in desc] == ["c", "a", "b"]
 
 def _far_future():
     from datetime import UTC, datetime, timedelta

@@ -473,23 +473,30 @@ Raises:
         return f"{self._task_key(task_id)}:result_consumers"
 
     async def _sync_attached_ttl(self, owner_task_id: str, keys: list[str]) -> None:
-        """Best-effort TTL sync: attached keys expire with the owner hot record.
+        """Best-effort TTL sync for attached keys.
 
-        Fallback (v0.1.4): when the owner hot record is already gone (e.g.
-        TTL=-2), the attached key still gets the default expiry instead of
-        remaining eternal — a ghost counter key created by DECR on a missing
-        key would otherwise never expire.
+        v0.1.5 (corrected): keyed on the ATTACHED key's own existence, not
+        blindly on the owner's:
+        - attached key EXISTS: owner alive -> follow the owner's TTL;
+          owner gone -> fall back to default_expire_time (the attached data
+          is real business state — e.g. result-consumer dedup, cancel votes
+          — and must not be dropped, or dedup/vote state would be lost).
+        - attached key MISSING: do nothing (a genuine ghost; never create
+          or TTL a non-existent key).
 
-        EXPIRE on a missing key is a harmless no-op (returns 0). Failures are
-        logged, never raised — the write itself already succeeded.
+        EXPIRE on a missing key is a harmless no-op. Failures are logged,
+        never raised — the write itself already succeeded.
         """
         try:
-            ttl = await self.client.ttl(self._task_key(owner_task_id))
-            if ttl <= 0:
-                ttl = self.default_expire_time
+            owner_ttl = await self.client.ttl(self._task_key(owner_task_id))
             async with self.client.pipeline(transaction=False) as pipe:
                 for key in keys:
-                    pipe.expire(key, ttl)
+                    if not await self.client.exists(key):
+                        continue  # genuine ghost: never materialize it
+                    if owner_ttl > 0:
+                        pipe.expire(key, owner_ttl)
+                    else:
+                        pipe.expire(key, self.default_expire_time)
                 await pipe.execute()
         except Exception as e:
             logger.warning(

@@ -1,5 +1,24 @@
 # orditect-adapter-ui Changelog
 
+## [0.1.5] - TBD
+
+### Fixed
+- `SnapshotView.query` now returns latest generations only (was: returned
+  every generation, violating the SnapshotReader contract) and honors
+  sort / page / time_range (was: silently swallowed — a T8 violation).
+- `SnapshotView.aggregate` validates group_by against the mechanism
+  whitelist (raises InvalidQueryError; was: silently accepted).
+- `SnapshotView.get_tree` folds per (task_id, step) (was: per task_id —
+  latent cross-step collision).
+- `SnapshotView._fold` unified to `mechanism.fold_snapshot_rows` (single
+  executable merge definition).
+- `AuditView.query` now honors sort / page / time_range; out-of-whitelist
+  sort raises InvalidQueryError.
+
+### Tests
+- New contract-alignment pins: latest-only query, out-of-whitelist
+  sort/group_by rejection, audit sort/page/whitelist.
+
 ## [0.1.4] - TBD
 
 ### Fixed

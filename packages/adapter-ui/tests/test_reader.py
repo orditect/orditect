@@ -81,6 +81,34 @@ class TestSnapshotRead:
         assert out.get("running", {}).get("count", 0) == 1   # a (e2, latest)
         assert out.get("failed", {}).get("count", 0) == 1    # b
 
+    async def test_query_returns_latest_generations_only(self, bundle_dir):
+        """Contract: query returns latest generations per node (v0.1.5)."""
+        reader = TraceBundleReader(bundle_dir)
+        rows = await reader.snapshot.query()
+        by_node: dict[tuple, list] = {}
+        for s in rows:
+            by_node.setdefault((s.task_id, s.step), []).append(s.execution_id)
+        for node, eids in by_node.items():
+            assert len(eids) == 1, (
+                f"query must return one row per node, got {eids} for {node}"
+            )
+        # node 'a' has generations e1/e2; latest is e2
+        a_rows = [s for s in rows if s.task_id == "a"]
+        assert a_rows[0].execution_id == "e2"
+
+    async def test_query_out_of_whitelist_sort_rejected(self, bundle_dir):
+        from orditect.protocol import InvalidQueryError, Sort
+
+        reader = TraceBundleReader(bundle_dir)
+        with pytest.raises(InvalidQueryError):
+            await reader.snapshot.query(sort=Sort(field="cost"))
+
+    async def test_aggregate_out_of_whitelist_group_by_rejected(self, bundle_dir):
+        from orditect.protocol import InvalidQueryError
+
+        reader = TraceBundleReader(bundle_dir)
+        with pytest.raises(InvalidQueryError):
+            await reader.snapshot.aggregate(group_by="cost")
 
 class TestDependencyRead:
     async def test_read_graph(self, bundle_dir):
@@ -101,6 +129,17 @@ class TestAuditRead:
         assert len(rows) == 1
         assert rows[0].event_id == "ev1"
 
+    async def test_audit_query_sort_page_and_whitelist(self, bundle_dir):
+        from orditect.protocol import InvalidQueryError, Page, Sort, SortDirection
+
+        reader = TraceBundleReader(bundle_dir)
+        rows = await reader.audit.query(
+            sort=Sort(field="created_at", direction=SortDirection.ASC),
+            page=Page(limit=10, offset=0),
+        )
+        assert len(rows) == 1
+        with pytest.raises(InvalidQueryError):
+            await reader.audit.query(sort=Sort(field="payload"))
 
 class TestResultRead:
     async def test_get_manifest(self, bundle_dir):

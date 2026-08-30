@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - TBD
+
+### Added
+- `mechanism.fold_snapshot_rows` + `SNAPSHOT_MERGE_FIELDS`: the single
+  executable definition of the snapshot merge semantics (adjudicated,
+  T3 Revision 0.1.5). Empty status = absence of intent (never a mutation,
+  never a regression); `created_at` = first write's instant; `updated_at` =
+  latest write's; non-state fields merge (non-None overwrites, None/absent
+  preserves).
+- New conformance cases: CF-SNP-014 (sparse save without status preserves
+  the record), CF-SNP-015 (sorting by expire_at with mixed expiring /
+  non-expiring records; no-expiry sorts as infinitely far), CF-VIEW-005/006
+  (consumer-tier out-of-whitelist sort/group_by rejection).
+
+### Fixed
+- DR-SNP-001 / DR-SNP-002: empty-status rows no longer count as drift and
+  no longer overwrite the recorded baseline (aligned with the adjudicated
+  merge semantics).
+
+### Changed
+- `domains/snapshot.py` docstrings: merge rule and the empty-status
+  distinction between `save` (no intent) and `save_terminal` (asserts
+  finality) documented.
+- `docs/terms.md`: T3 Revision 0.1.5 note; Appendix A/B register
+  CF-SNP-014/015 and CF-VIEW-005/006.
+- Gate hardening: Lua time-source gate matches on assignment (instant
+  variable assigned from ARGV) instead of proximity — zero false positives
+  on the legitimate server-clock pattern; error-surface base-class matching
+  robust to attribute bases; business-neutrality excludes rules/ (aligned
+  with api-surface).
+
 ## [0.1.4] - TBD
 
 ### Added

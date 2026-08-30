@@ -17,6 +17,17 @@ semantics — those belong to the external orchestration system.
 | Explicit capability (T8) | Missing optional capabilities raise `UnsupportedCapabilityError`, never silently degrade. |
 | Observation non-blocking (T9) | All notification paths are best-effort; failures are logged, never raised. |
 
+| Explicit capability (T8) | Missing optional capabilities raise `UnsupportedCapabilityError`, never silently degrade. |
+| Observation non-blocking (T9) | All notification paths are best-effort; failures are logged, never raised. |
+
+Additional boundaries:
+
+- External-vocabulary boundary: `TaskOrchestrator.cancel` / `terminate`
+  coerce `TaskStatus(record["status"])` and therefore only understand the
+  flow vocabulary. For tasks written with an external orchestration
+  system's vocabulary, use `DependencyGovernor`'s vocabulary-parameterized
+  APIs (`notify_task_terminal`, `vote_cancel`) instead.
+
 ## Construction
 
 ```python
@@ -138,6 +149,13 @@ await gov.invalidate_exempt_snapshot(task_id: str) -> None
 Resets the exemption snapshot to None (falls back to the live ancestor
 walk). Call after `reopen_task` and before re-execution. `RecoveryService`'s
 rerun path invokes this automatically when a governor is injected.
+Holder-liveness boundary (known, tracked separately): both the live
+ancestor walk and the exemption snapshot do NOT verify that the resource
+holder is still alive — an ancestor's `resource` field persists in its
+record after the ancestor terminates. A child started later may therefore
+be exempted against a slot that is no longer held. This is a documented
+semantic boundary of the v0.1.1 exemption mechanism, not a v0.1.5 fix
+target.
 
 ## Call sequence (three-parent child)
 

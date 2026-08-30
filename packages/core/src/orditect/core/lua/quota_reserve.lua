@@ -15,7 +15,6 @@ local function bump_pending_ttl()
     end
 end
 
--- lease slot without consuming quota); units<0 is rejected.
 if (not units) or units < 0 then
     return cjson.encode({ok=false, reason="invalid_units", current=tonumber(redis.call("GET", pending_key) or "0"), reserved=0})
 end
@@ -28,25 +27,24 @@ local now_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
 local ttl_ms = task_ttl * 1000
 
 -- Reap expired leases (prevents pending_units inflation after task crash).
+-- v0.1.5: only touch pending_key when it exists. Writing into a dead key
+-- would suppress the renewal branch's rebuild-from-leases logic below.
 local expired = redis.call('ZRANGEBYSCORE', leases_key, '-inf', now_ms - ttl_ms)
 for _, expired_task_id in ipairs(expired) do
     local expired_units_str = redis.call('HGET', leases_key .. ':units', expired_task_id)
     if expired_units_str then
         local expired_units = tonumber(expired_units_str)
-        local current = tonumber(redis.call("GET", pending_key) or "0")
-        local nextv = math.max(0, current - expired_units)
-        redis.call("SET", pending_key, tostring(nextv))
-        bump_pending_ttl()
+        if redis.call('EXISTS', pending_key) == 1 then
+            local current = tonumber(redis.call("GET", pending_key) or "0")
+            local nextv = math.max(0, current - expired_units)
+            redis.call("SET", pending_key, tostring(nextv))
+            bump_pending_ttl()
+        end
         redis.call('HDEL', leases_key .. ':units', expired_task_id)
     end
     redis.call('ZREM', leases_key, expired_task_id)
 end
--- v0.1.4: the renewal must ALSO keep pending_key alive for at least as long
--- as the renewed lease. A renewal chain (>= 2 renewals, each within task_ttl
--- of the previous) can push the lease's logical lifetime (score + task_ttl)
--- beyond pending_key's fallback TTL (set at first reserve). If pending_key
--- dies while a live lease remains, the lease's units evaporate from the
--- counter and a later reserve over-admits (over-allocation).
+
 local existing_score = redis.call('ZSCORE', leases_key, task_id)
 if existing_score then
     redis.call('ZADD', leases_key, now_ms, task_id)
@@ -73,7 +71,22 @@ if existing_score then
 end
 
 -- Quota check
-local current = tonumber(redis.call("GET", pending_key) or "0")
+-- v0.1.5: when pending_key is dead but leases survive, rebuild the counter
+-- from the surviving leases first (the reaping pass above already ran, so
+-- ZRANGE yields exactly the un-expired leases). Otherwise a dead counter
+-- with live leases would over-admit.
+local current
+if redis.call('EXISTS', pending_key) == 1 then
+    current = tonumber(redis.call("GET", pending_key) or "0")
+else
+    current = 0
+    for _, member in ipairs(redis.call('ZRANGE', leases_key, 0, -1)) do
+        current = current + tonumber(redis.call('HGET', leases_key .. ':units', member) or "0")
+    end
+    if current > 0 then
+        redis.call('SET', pending_key, tostring(current), 'EX', leases_ttl)
+    end
+end
 local nextv = current + units
 if nextv > max_units then
     return cjson.encode({ok=false, reason="limit_exceeded", current=current, reserved=0})

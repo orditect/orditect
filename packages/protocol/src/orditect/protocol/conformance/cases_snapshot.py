@@ -216,3 +216,82 @@ async def non_state_fields_merge_into_terminal_generation(adapter: Any) -> None:
         f"non-state field cost was erased by a sparse same-generation save: "
         f"{got.cost!r}"
     )
+
+@case("CF-SNP-014")
+async def sparse_save_without_status_preserves_record(adapter: Any) -> None:
+    """CF-SNP-014 (T3): a sparse same-generation save carrying no status must
+    not regress status nor drift created_at; non-state fields still merge;
+    after save_terminal, a status-less save is legal (no state intent)."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    tid, step, eid = "t-snp-014", "step", "e1"
+    first = TaskSnapshot(
+        task_id=tid, step=step, execution_id=eid,
+        status="running", cost={"usd": 0.1},
+    )
+    await adapter.save(first)
+    sparse = TaskSnapshot(
+        task_id=tid, step=step, execution_id=eid, error="boom",
+    )
+    await adapter.save(sparse)
+
+    got = await adapter.get(tid, step)
+    assert got is not None
+    assert got.status == "running"                 # empty status never regresses
+    assert got.cost == {"usd": 0.1}                # previously recorded field preserved
+    assert got.error == "boom"                     # incoming field merged
+    assert got.created_at == first.created_at      # created_at never drifts
+    assert got.updated_at >= sparse.updated_at     # updated_at advances
+
+    # terminal variant: a status-less save after save_terminal is legal
+    await adapter.save_terminal(
+        TaskSnapshot(
+            task_id=tid, step=step, execution_id=eid,
+            status="done", cost={"usd": 0.1}, error="boom",
+        )
+    )
+    await adapter.save(
+        TaskSnapshot(task_id=tid, step=step, execution_id=eid, model="m1")
+    )
+    got = await adapter.get(tid, step)
+    assert got is not None
+    assert got.status == "done"
+    assert got.model == "m1"
+
+
+@case("CF-SNP-015")
+async def sort_by_expire_at_mixed_none(adapter: Any) -> None:
+    """CF-SNP-015 (T6): sorting by expire_at works with mixed
+    expiring/non-expiring records; no-expiry sorts as infinitely far
+    (ASC last, DESC first)."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    from orditect.protocol.models import Sort, SortDirection
+
+    future = datetime.now(UTC) + timedelta(hours=1)
+    near = datetime.now(UTC) + timedelta(minutes=1)
+    await adapter.save(TaskSnapshot(
+        task_id="cf-015-a", step="s", execution_id="e1", expire_at=future,
+    ))
+    await adapter.save(TaskSnapshot(
+        task_id="cf-015-b", step="s", execution_id="e1", expire_at=near,
+    ))
+    await adapter.save(TaskSnapshot(
+        task_id="cf-015-c", step="s", execution_id="e1",
+    ))
+
+    asc = await adapter.query(
+        sort=Sort(field="expire_at", direction=SortDirection.ASC)
+    )
+    ids_asc = [s.task_id for s in asc if s.task_id.startswith("cf-015-")]
+    assert ids_asc == ["cf-015-b", "cf-015-a", "cf-015-c"], (
+        f"ASC must order expiring records first, no-expiry last: {ids_asc}"
+    )
+
+    desc = await adapter.query(
+        sort=Sort(field="expire_at", direction=SortDirection.DESC)
+    )
+    ids_desc = [s.task_id for s in desc if s.task_id.startswith("cf-015-")]
+    assert ids_desc == ["cf-015-c", "cf-015-a", "cf-015-b"], (
+        f"DESC must order no-expiry first: {ids_desc}"
+    )

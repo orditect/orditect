@@ -103,6 +103,9 @@ class TestNonStreaming:
         )
 
         assert result["usage"]["total_tokens"] == 42
+        # C5 (v0.1.5): the bridge no longer injects _latency_ms into the
+        # caller-visible provider response.
+        assert "_latency_ms" not in result
         events = store.audit._events  # memory part introspection for pinning
         assert len(events) == 1
         ev = events["c-1"]
@@ -111,7 +114,10 @@ class TestNonStreaming:
         assert ev.payload["model"] == "gpt-4o"
         assert ev.payload["usage"]["total_tokens"] == 42
         assert ev.payload["finish_reason"] == "stop"
-        assert "latency_ms" in ev.payload
+        # FLIP(v0.1.5): latency is recorded as elapsed_ms by
+        # GovernedCallClient; the bridge no longer emits latency_ms.
+        assert "elapsed_ms" in ev.payload
+        assert "latency_ms" not in ev.payload
 
     async def test_messages_pointerized(self):
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -170,6 +176,11 @@ class TestStreaming:
         ev = next(iter(events.values()))
         assert ev.payload["usage"]["total_tokens"] == 7
         assert ev.payload["model"] == "gpt-4o"
+        # C2 (v0.1.5): cost_fn output is recorded in the audit payload.
+        assert ev.payload["cost_units"] == 7
+        # FLIP(v0.1.5): latency comes from the client's elapsed_ms.
+        assert "elapsed_ms" in ev.payload
+        assert "latency_ms" not in ev.payload
 
     async def test_stream_usage_missing_cost_fn_gets_none(self):
         async def handler(request: httpx.Request) -> httpx.Response:

@@ -45,23 +45,17 @@ async def test_decr_missing_key_returns_negative(db):
     # fault-tolerance contract: DECR on a missing key yields -1, no exception
     assert await db.decr_remaining_deps("ghost") == -1
 
-async def test_decr_ghost_counter_gets_ttl_fallback(db, redis_client):
-    """v0.1.4: a ghost counter created by DECR on a missing key must still
-    carry a TTL (fallback to default expiry) even when the hot record is
-    gone — never an eternal ghost key."""
+# FLIP(v0.1.5): a ghost counter materialized by DECR on a missing key gets
+# a fallback TTL when it exists (owner gone) — never eternal; a key that
+# does not exist is never materialized by the sync itself.
+async def test_decr_ghost_counter_gets_fallback_ttl(db, redis_client):
+    """DECR on a missing key materializes a counter; with the owner gone it
+    must carry a TTL (never eternal), because the DECR itself made it real
+    state."""
     await db.client.delete("task:ghost2")
-    await db.decr_remaining_deps("ghost2")
+    assert await db.decr_remaining_deps("ghost2") == -1
     ttl = await db.client.ttl("task:ghost2:remaining_deps")
-    assert ttl > 0, "ghost counter key must not be eternal"
-
-# async def test_decr_ghost_counter_gets_ttl_fallback(db):
-#     """v0.1.4: a ghost counter created by DECR on a missing key must still
-#     carry a TTL (fallback to default expiry) even when the hot record is
-#     gone — never an eternal ghost key."""
-#     await db.client.delete("task:ghost2")
-#     await db.decr_remaining_deps("ghost2")
-#     ttl = await db.client.ttl("task:ghost2:remaining_deps")
-#     assert ttl > 0, "ghost counter key must not be eternal"
+    assert ttl > 0, "materialized counter must not be eternal"
 # ----- TTL discipline -----
 
 
@@ -170,7 +164,9 @@ async def test_list_ready_dep_tasks_with_status_filter(db):
     assert await db.list_ready_dep_tasks(status="pending") == ["a"]
     await db.update_task("a", {"status": "in_progress"})
     assert await db.list_ready_dep_tasks(status="pending") == []
-    # ghost candidate: counter exists but hot record missing -> excluded by filter
+    # ghost candidate: set_remaining_deps materializes a counter without a
+    # hot record; it is kept (with a fallback TTL) and shows up unfiltered,
+    # but is excluded by the status filter (no hot record to match).
     await db.set_remaining_deps("ghost", 0)
     assert "ghost" in await db.list_ready_dep_tasks()
     assert "ghost" not in await db.list_ready_dep_tasks(status="pending")

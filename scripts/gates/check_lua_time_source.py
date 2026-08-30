@@ -29,11 +29,12 @@ from common import rel_posix, repo_root
 
 _LUA_DIR = Path("packages/core/src/orditect/core/lua")
 
-_TIMEISH = r"(?:now|time|expire|expiry|ttl|slot|deadline)"
-#: tonumber(ARGV[n]) within 80 chars of a time-ish word (either direction)
-#: Instant-valued words (clock readings): client-supplied values for these
-#: pollute shared state — forbidden from ARGV.
-_INSTANT_WORDS = r"(?:now_ms|now|expire_at|slot_ms|server_now|deadline|expire_at_ms)"
+#: Instant-valued variable names (clock readings): a client-supplied value
+#: flowing INTO one of these pollutes shared state — forbidden from ARGV.
+#: These are the assignment targets the gate watches.
+_INSTANT_WORDS = (
+    r"(?:now_ms|expire_at|slot_ms|server_now|deadline|expire_at_ms)"
+)
 
 #: Duration-valued words (lease lengths, TTL seconds, frequencies): the
 #: caller declares these; passing them via ARGV is the designed contract.
@@ -41,9 +42,23 @@ _INSTANT_WORDS = r"(?:now_ms|now|expire_at|slot_ms|server_now|deadline|expire_at
 _DURATION_WORDS = ("ttl", "lease", "expiry", "frequency", "interval",
                    "task_ttl", "lease_time", "refill_frequency")
 
+#: L1 patterns: an instant-typed variable ASSIGNED from a numeric ARGV value
+#: (directly or through arithmetic), in either statement order. Matching on
+#: assignment (not mere proximity within 80 chars) avoids false positives on
+#: the legitimate server-clock pattern (now_ms derived from redis.call
+#: ('TIME')), which never assigns an ARGV into an instant variable.
+_ARGV_NUM = r"tonumber\(ARGV\[\d+\]\)"
+_INSTANT_ASSIGN = rf"{_INSTANT_WORDS}\s*=\s*[^=\n]*{_ARGV_NUM}"
+
 _FORBIDDEN_PATTERNS = [
-    re.compile(rf"tonumber\(ARGV\[\d+\]\).{{0,80}}{_INSTANT_WORDS}", re.IGNORECASE),
-    re.compile(rf"{_INSTANT_WORDS}.{{0,80}}tonumber\(ARGV\[\d+\]\)", re.IGNORECASE),
+    # instant_var = <expr containing tonumber(ARGV[n])>  (single line)
+    re.compile(_INSTANT_ASSIGN, re.IGNORECASE),
+    # <compute something from tonumber(ARGV[n])> then assign into instant_var
+    # across at most one intervening line (handles two-step temporaries).
+    re.compile(
+        rf"{_ARGV_NUM}[^\n]*\n[^\n]*{_INSTANT_WORDS}\s*=",
+        re.IGNORECASE,
+    ),
 ]
 
 _SERVER_CLOCK = "redis.call('TIME')"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orditect-protocol"
-version = "0.1.4"
+version = "0.1.5"
 description = "Storage interaction contracts for the Orditect ecosystem: unified protocols for content, audit, result, and snapshot storage backends"
 readme = "README.md"
 requires-python = ">=3.12"

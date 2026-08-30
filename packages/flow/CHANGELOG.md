@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - TBD
+
+### Fixed
+- `rebuild_dep_counters` hardened: a child with any missing parent hot
+  record is skipped as a whole (was: silently under-counted -> premature
+  readiness); threshold-reaching votes trigger cancel via injected
+  lifecycle and are always reported (`cancelled` / `pending_cancel`);
+  status vocabulary is caller-declared (was: hardcoded, violating T6).
+- Recovery rerun background tasks now retrieve exceptions (aligned with
+  the orchestrator's F5 discipline; no more "exception was never
+  retrieved" warnings).
+- `GovernedCallClient.call`: a token flipping to cancelled AFTER acquire
+  (GovernedClient returns None instead of raising) is now audited as
+  cancelled, not ok.
+
+### Added
+- `GovernedCallClient` audit payloads now carry `cost_units` whenever
+  cost_fn is evaluated (the documented "cost feeds observation" semantics).
+
+### Changed
+- `docs/governance.md`: external-vocabulary boundary of cancel/terminate
+  documented; exemption holder-liveness boundary recorded (tracked
+  separately, not a fix target).
+
 ## [0.1.4] - TBD
 
 ### Fixed

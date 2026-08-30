@@ -21,7 +21,12 @@ from orditect.protocol.models import (
     TaskPointer,
     TaskSnapshot,
 )
-from orditect.protocol.mechanism import GROUP_BY_FIELDS, SORT_FIELDS
+from orditect.protocol.mechanism import (
+    GROUP_BY_FIELDS,
+    SORT_FIELDS,
+    fold_snapshot_rows,
+    idempotent_payload_equal,
+)
 
 
 class _ContentPart:
@@ -114,23 +119,16 @@ class _SnapshotPart:
         key = (snapshot.task_id, snapshot.step, snapshot.execution_id)
         existing = self._snap.get(key)
         if key in self._terminal and existing is not None:
-            if snapshot.status != existing.status:
+            # T3: only a non-empty, differing status is a state mutation
+            # (adjudicated v0.1.5). An empty status is the absence of
+            # intent — it never triggers the guard.
+            if snapshot.status and snapshot.status != existing.status:
                 raise TerminalStateViolationError(str(key))
         if existing is not None:
-            updates: dict = {
-                f: getattr(snapshot, f)
-                for f in (
-                    "parent_task_id", "input_pointer", "output_pointer",
-                    "error", "cost", "model", "expire_at",
-                )
-                if getattr(snapshot, f) is not None
-            }
-            # Status advances only when non-empty (state never regresses).
-            if snapshot.status:
-                updates["status"] = snapshot.status
-            updates["updated_at"] = snapshot.updated_at
-            merged = existing.model_copy(update=updates)
-            self._snap[key] = merged
+            record = fold_snapshot_rows(
+                [existing.model_dump(), snapshot.model_dump()]
+            )
+            self._snap[key] = TaskSnapshot.model_validate(record)
             return
         self._snap[key] = snapshot
 
@@ -196,10 +194,17 @@ class _SnapshotPart:
                 rows = [s for s in rows if s.created_at >= tr.start]
             if tr.end is not None:
                 rows = [s for s in rows if s.created_at < tr.end]
+        from datetime import UTC, datetime
         from orditect.protocol.models import Sort as _Sort, SortDirection
+
+        def _key(s: TaskSnapshot):
+            value = getattr(s, sort.field)
+            if sort.field == "expire_at":
+                return (value is None, value or datetime.max.replace(tzinfo=UTC))
+            return value
+
         sort = sort or _Sort()
-        rows.sort(key=lambda s: getattr(s, sort.field),
-                  reverse=sort.direction is SortDirection.DESC)
+        rows.sort(key=_key, reverse=sort.direction is SortDirection.DESC)
         page = kw.get("page")
         if page is not None:
             rows = rows[page.offset: page.offset + page.limit]
@@ -324,9 +329,14 @@ class _GoodAdapter:
         return await self._result.save(*args, **kw)
 
     async def query(self, **kw: Any):
-        # snapshot query is the only one accepting status/parent_task_id;
-        # audit query is identified by scope/event_type or by task_id alone.
-        if "status" in kw or "parent_task_id" in kw:
+        # snapshot query is identified by snapshot-only filters or by a
+        # snapshot-whitelisted sort field; otherwise it's the audit query.
+        if (
+            "status" in kw
+            or "parent_task_id" in kw
+            or (kw.get("sort") is not None
+                and kw["sort"].field in SORT_FIELDS["snapshot"])
+        ):
             return await self._snapshot.query(**kw)
         return await self._audit.query(**kw)
 
@@ -535,6 +545,10 @@ class _ConsumerWithSeed:
 
     async def query(self, **kw: Any):
         from datetime import UTC, datetime
+        sort = kw.get("sort")
+        if sort is not None and sort.field not in SORT_FIELDS["snapshot"]:
+            from orditect.protocol.errors import InvalidQueryError
+            raise InvalidQueryError(f"sort.field {sort.field!r} not whitelisted")
         rows = [
             s for s in self._snap.values()
             if s.expire_at is None or s.expire_at > datetime.now(UTC)
@@ -546,6 +560,9 @@ class _ConsumerWithSeed:
     async def aggregate(self, **kw: Any):
         from datetime import UTC, datetime
         group_by = kw.get("group_by", "status")
+        if group_by not in GROUP_BY_FIELDS["snapshot"]:
+            from orditect.protocol.errors import InvalidQueryError
+            raise InvalidQueryError(f"group_by {group_by!r} not whitelisted")
         rows = [
             s for s in self._snap.values()
             if s.expire_at is None or s.expire_at > datetime.now(UTC)
@@ -656,14 +673,14 @@ class TestConsumerProfile:
         report = run_conformance(_ConsumerWithSeed(), profile="consumer")
         assert report.failed == 0, report.summary()
         view_results = [r for r in report.results if r.half_domain == "view"]
-        assert len(view_results) == 4
+        assert len(view_results) == 6  # CF-VIEW-001..006
         assert all(r.status == "passed" for r in view_results)
 
     def test_unseeded_consumer_degrades_to_skip(self):
         report = run_conformance(_ConsumerNoSeed(), profile="consumer")
         assert report.failed == 0
         view_results = [r for r in report.results if r.half_domain == "view"]
-        assert len(view_results) == 4
+        assert len(view_results) == 6  # CF-VIEW-001..006
         assert all(r.status == "skipped" for r in view_results)
         assert all("seed not implemented" in r.detail for r in view_results)
 

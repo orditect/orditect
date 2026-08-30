@@ -16,11 +16,14 @@ def dr_snp_001(lines: Iterable[dict]) -> list[Finding]:
     With op: after save_terminal for a key, any later row for the same key
     whose status differs from the terminal status is a violation.
     Without op: any status drift for the same key is a violation, degraded.
+
+    Empty-status rows carry no state intent (adjudicated v0.1.5): they
+    never overwrite the recorded baseline and never count as drift.
     """
     rows = list(lines)
     findings: list[Finding] = []
     terminal: dict[tuple, str] = {}     # key -> terminal status (private state)
-    seen_status: dict[tuple, str] = {}  # key -> last status (degraded mode)
+    seen_status: dict[tuple, str] = {}  # key -> last non-empty status (degraded mode)
 
     for i, line in iter_domain_rows(rows, "snapshot"):
         data = line.get("data", {})
@@ -29,7 +32,7 @@ def dr_snp_001(lines: Iterable[dict]) -> list[Finding]:
         op = line.get("op")
 
         if op in _SNAPSHOT_OPS:
-            if key in terminal and status != terminal[key]:
+            if key in terminal and status and status != terminal[key]:
                 findings.append(Finding(
                     rule="DR-SNP-001", level="violation",
                     location=f"snapshots[{i}].data",
@@ -37,11 +40,11 @@ def dr_snp_001(lines: Iterable[dict]) -> list[Finding]:
                             f"{terminal[key]!r} -> {status!r}",
                     term="T3",
                 ))
-            if op == "save_terminal":
+            if op == "save_terminal" and status:
                 terminal[key] = status
         else:
             # degraded mode: no op available, only drift is checkable
-            if key in seen_status and status != seen_status[key]:
+            if key in seen_status and status and status != seen_status[key]:
                 findings.append(Finding(
                     rule="DR-SNP-001", level="violation",
                     location=f"snapshots[{i}].data",
@@ -51,7 +54,8 @@ def dr_snp_001(lines: Iterable[dict]) -> list[Finding]:
                     term="T3",
                     degraded=True,
                 ))
-            seen_status[key] = status
+            if status:
+                seen_status[key] = status
     return findings
 
 
@@ -61,6 +65,9 @@ def dr_snp_002(lines: Iterable[dict]) -> list[Finding]:
     Any save/save_terminal for a key whose status differs from a previously
     recorded terminal status for that key violates op-sequence legality.
     Requires op — skipped entirely (not degraded) when op is absent.
+
+    Empty-status rows carry no state intent (adjudicated v0.1.5): they are
+    neither a violation nor a new terminal baseline.
     """
     rows = list(lines)
     if not any(line.get("op") in _SNAPSHOT_OPS for _, line in iter_domain_rows(rows, "snapshot")):
@@ -75,7 +82,7 @@ def dr_snp_002(lines: Iterable[dict]) -> list[Finding]:
         data = line.get("data", {})
         key = (data.get("task_id"), data.get("step"), data.get("execution_id"))
         status = data.get("status", "")
-        if key in terminal and status != terminal[key]:
+        if key in terminal and status and status != terminal[key]:
             findings.append(Finding(
                 rule="DR-SNP-002", level="violation",
                 location=f"snapshots[{i}]",
@@ -83,7 +90,7 @@ def dr_snp_002(lines: Iterable[dict]) -> list[Finding]:
                         f"{terminal[key]!r} -> {status!r}",
                 term="T3",
             ))
-        if op == "save_terminal":
+        if op == "save_terminal" and status:
             terminal[key] = status
     return findings
 

@@ -1,5 +1,25 @@
 # orditect-adapter-local Changelog
 
+## [0.1.5] - TBD
+
+### Fixed
+- `_fold` rewritten on `mechanism.fold_snapshot_rows` — status no longer
+  regresses on empty-status sparse saves, and `created_at` no longer
+  drifts on merge (both were silent record corruption).
+- `save()` terminal guard: empty status (absence of intent) no longer
+  raises TerminalStateViolationError.
+- Sorting by `expire_at` no longer misorders via the string "None" —
+  no-expiry sorts as infinitely far.
+- result part: `stream_id` is validated as a safe path segment (no
+  traversal).
+
+### Changed
+- README: append is best-effort (torn tail rows skipped by design); no
+  fsync; scale boundary tightened (O(n) read-fold and write-scan).
+
+### Tests
+- New CF-SNP-014/015 mirrors in `test_local_semantics.py`.
+
 ## [0.1.4] - TBD
 
 ### Fixed

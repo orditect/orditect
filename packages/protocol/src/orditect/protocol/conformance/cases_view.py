@@ -87,3 +87,33 @@ async def status_filter_and_aggregate(adapter: Any) -> None:
     )
     assert out.get("failed", {}).get("count", 0) == 1  # cv-b
     assert out.get("running", {}).get("count", 0) == 1  # cv-a (e2, latest)
+
+@case("CF-VIEW-005")
+async def sort_field_outside_whitelist_rejected(adapter: Any) -> None:
+    """CF-VIEW-005 (T6): out-of-whitelist sort.field raises InvalidQueryError
+    (consumer-tier mirror of CF-SNP-011)."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    from orditect.protocol.errors import InvalidQueryError
+    from orditect.protocol.models import Sort
+
+    try:
+        await adapter.query(sort=Sort(field="cost"))
+    except InvalidQueryError:
+        return
+    raise AssertionError("expected InvalidQueryError, got success")
+
+
+@case("CF-VIEW-006")
+async def group_by_outside_whitelist_rejected(adapter: Any) -> None:
+    """CF-VIEW-006 (T6): out-of-whitelist group_by raises InvalidQueryError
+    (consumer-tier mirror of CF-SNP-012)."""
+    if not adapter.capabilities.supports("snapshot_query"):
+        return
+    from orditect.protocol.errors import InvalidQueryError
+
+    try:
+        await adapter.aggregate(group_by="cost")
+    except InvalidQueryError:
+        return
+    raise AssertionError("expected InvalidQueryError, got success")

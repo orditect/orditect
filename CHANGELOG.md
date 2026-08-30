@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.1.5] - TBD
+
+**v0.1.5 = bugfix + certification-hardening release.** No new capabilities —
+every change is a fulfillment of an existing contract promise, or a
+completion of the certification/documentation layer.
+
+### Fixed (contract fulfillments)
+
+- **snapshot merge semantics adjudicated and unified** (T3 Revision 0.1.5):
+  an empty status string is the absence of status intent — never a
+  mutation, never a regression; `created_at` is the first write's instant;
+  `updated_at` the latest. New shared primitives
+  `mechanism.fold_snapshot_rows` + `SNAPSHOT_MERGE_FIELDS`; the memory
+  guard, local `_fold`, adapter-ui `_fold`, and DR-SNP-001/002 are all
+  unified to it. New CF-SNP-014 pins the semantics for every adapter.
+- **core: `task_reopen.lua` clears the old generation's `result`/`error`** —
+  a new generation must not inherit the previous generation's output
+  (prevents a crash between reopen and re-execution from being misjudged
+  as REUSE by resume).
+- **adapters: sorting by `expire_at` fixed** — memory raised TypeError on
+  mixed None/datetime; local misordered via the string "None". Adjudicated:
+  no-expiry sorts as infinitely far (ASC last, DESC first). New CF-SNP-015.
+- **adapter-ui: full SnapshotReader contract alignment** — query returns
+  latest generations only and now honors sort/page/time_range
+  (out-of-whitelist sort/group_by raises InvalidQueryError); get_tree folds
+  per (task_id, step); AuditView honors sort/page/time_range.
+- **flow: `rebuild_dep_counters` hardened** — a child with any missing
+  parent hot record is skipped as a whole (was: silently under-counted);
+  threshold-reaching votes trigger cancel via injected lifecycle and are
+  always reported (`cancelled` / `pending_cancel`); status vocabulary is
+  caller-declared (was: hardcoded).
+
+### Fixed (residual gaps from the v0.1.4 fix family)
+
+- **core: `quota_release.lua`** — a partial release with pttl<=0 no longer
+  leaves an eternal non-zero pending key (fallback TTL via ARGV[2]).
+- **core: `quota_reserve.lua`** — the reaping pass no longer writes into a
+  dead pending key (which suppressed the renewal rebuild); a dead counter
+  with surviving leases is rebuilt from the leases before any quota
+  decision, on both the renewal and fresh-reserve paths (over-admission
+  fix).
+- **core: `_sync_attached_ttl`** — adjudicated final semantics: an attached
+  key that EXISTS follows the owner's TTL (or a fallback when the owner is
+  gone — its data is real business state and must not be dropped); a key
+  that does NOT exist is never materialized (genuine ghosts never pollute
+  SCAN-based queries). (2 FLIPs)
+- **flow: recovery rerun background tasks now retrieve exceptions**
+  (aligned with the orchestrator's F5 discipline).
+
+### Added (certification & observability)
+
+- New consumer-tier whitelist cases CF-VIEW-005/006 (the consumer profile
+  now actually verifies out-of-whitelist rejection).
+- `GovernedCallClient` audit payloads now carry `cost_units` whenever
+  cost_fn is evaluated (the documented "cost feeds observation" semantics).
+- Gate hardening: the Lua time-source gate now matches on assignment (an
+  instant variable assigned from ARGV) instead of proximity — zero false
+  positives on the legitimate server-clock pattern; the error-surface gate's
+  base-class matching is robust to attribute bases; business-neutrality
+  excludes rules/ (aligned with api-surface).
+
+### Changed (docs)
+
+- adapter-local README: append is best-effort (torn tail rows are skipped
+  by design); no fsync; scale boundary tightened.
+- flow governance docs: external-vocabulary boundary of cancel/terminate;
+  exemption holder-liveness boundary recorded (tracked separately).
+- bridge-openai: `_latency_ms` no longer leaks into the caller-visible
+  provider response (audit uses the client's `elapsed_ms`; 2 FLIPs).
+- adapter-local result: `stream_id` is validated as a safe path segment.
+
+### Pinning-flip ledger (v0.1.5)
+
+| file | flip |
+|---|---|
+| packages/core/tests/pinning/test_v011_dep_primitives.py | ghost counter: deleted → materialized-with-fallback-TTL (final adjudicated semantics) |
+| packages/core/tests/pinning/test_v011_dep_primitives.py | ready-scan ghost: absent → present-unfiltered / excluded-by-status-filter |
+| packages/bridge-openai/tests/test_client.py | latency_ms → elapsed_ms (2 places) |
+
 ## [0.1.4] - TBD
 
 **v0.1.4 = bugfix-only release.** No new capabilities — every change is a

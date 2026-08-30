@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.5] - TBD
+
+### Fixed
+- `save()` terminal guard: only a non-empty, differing status is a state
+  mutation — an empty status (absence of intent) no longer raises
+  TerminalStateViolationError (was a false rejection).
+- Merge logic unified to `mechanism.fold_snapshot_rows` (single executable
+  definition; created_at no longer drifts on merge).
+- Sorting by `expire_at` no longer raises TypeError on mixed
+  None/datetime — no-expiry sorts as infinitely far (ASC last, DESC first).
+
+### Tests
+- New `TestSparseSaveSemantics` (CF-SNP-014 mirror) and `TestExpireAtSort`
+  (CF-SNP-015 mirror).
+
 ## [0.1.4] - TBD
 
 ### Fixed

@@ -41,12 +41,16 @@ class SnapshotWriter(Protocol):
         Semantics: upserts the snapshot identified by
         (task_id, step, execution_id).
 
-        Merge rule (T3 second face): when a record already exists for the
-        same generation, non-state fields (parent_task_id, input_pointer,
-        output_pointer, error, cost, model, expire_at) are merged to
-        complete the record — fields present in the incoming snapshot
-        overwrite, absent fields are preserved. `status` is NEVER merged
-        (it is state); `updated_at` always advances to the latest write.
+        Merge rule (T3 second face, adjudicated v0.1.5): when a record
+        already exists for the same generation, non-state fields
+        (parent_task_id, input_pointer, output_pointer, error, cost,
+        model, expire_at) are merged to complete the record — fields
+        present in the incoming snapshot overwrite, absent fields are
+        preserved. `status` advances only with a non-empty incoming value:
+        an empty status string is the absence of status intent — never a
+        mutation (T3 does not reject it), never a regression (it never
+        overwrites the recorded state). `created_at` keeps the first
+        write's instant; `updated_at` always advances to the latest write.
 
         Idempotency / concurrency (terms T4, T10): re-saving the same key
         with identical business content is a silent success. Concurrent
@@ -74,6 +78,12 @@ class SnapshotWriter(Protocol):
         Semantics: identical to `save`, plus marks this generation's state as
         terminal from this point on (term T3). Idempotent for the same key
         with an identical snapshot (T4).
+
+        Empty-status note (adjudicated v0.1.5): unlike `save`, a
+        `save_terminal` carrying an empty status asserts FINALITY without
+        asserting a new state — on an already-terminal generation it
+        conflicts when the recorded terminal content differs (T3), because
+        the call itself is a terminal declaration, not the absence of intent.
 
         Raises:
             TerminalStateViolationError: this generation was already terminal

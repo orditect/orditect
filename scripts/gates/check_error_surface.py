@@ -80,9 +80,12 @@ def main() -> int:
         tree = parse_python(errors_path)
         for node in tree.body:
             if isinstance(node, ast.ClassDef) and node.name == name:
-                bases = [
-                    b.id for b in node.bases if isinstance(b, ast.Name)
-                ]
+                bases = []
+                for b in node.bases:
+                    if isinstance(b, ast.Name):
+                        bases.append(b.id)
+                    elif isinstance(b, ast.Attribute):
+                        bases.append(b.attr)
                 if name not in _ALLOWED_NON_CONTRACT and not any(
                     base in contract_names or base == "ContractError"
                     for base in bases

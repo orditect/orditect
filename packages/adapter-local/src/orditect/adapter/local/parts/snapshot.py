@@ -26,6 +26,7 @@ from orditect.protocol import (
 from orditect.protocol.mechanism import (
     GROUP_BY_FIELDS,
     SORT_FIELDS,
+    fold_snapshot_rows,
     idempotent_payload_equal,
 )
 
@@ -50,15 +51,15 @@ class LocalSnapshotPart:
     # ---------- folding ----------
 
     def _fold(self) -> tuple[dict, set]:
-        """Fold the stream into (latest row per key, terminal keys).
+        """Fold the stream into (record per key, terminal keys).
 
-        T3 second face: non-state fields may merge into a terminal
-        generation's record to complete it; status comes from the LATEST
-        row in the stream (it is state, always advancing with the newest
-        write), while non-state fields merge (incoming overwrites, absent
-        fields preserved).
+        Merge semantics are the single executable definition in
+        mechanism.fold_snapshot_rows (adjudicated v0.1.5): status comes
+        from the LAST row whose status is non-empty; created_at keeps the
+        first row's instant; updated_at takes the latest row's; non-state
+        fields merge (present overwrites, absent preserves).
         """
-        rows: dict[tuple[str, str, str], dict] = {}
+        grouped: dict[tuple[str, str, str], list[dict]] = {}
         terminal: set[tuple[str, str, str]] = set()
         for env in iter_envelopes(self._file):
             data = env["data"]
@@ -67,22 +68,14 @@ class LocalSnapshotPart:
                 data.get("step", ""),
                 data.get("execution_id", ""),
             )
-            existing = rows.get(key)
-            if existing is None:
-                rows[key] = data
-            else:
-                # Status: always the latest row's status (state advances
-                # with the newest write).
-                # Non-state fields: incoming overwrites; previously recorded
-                # fields are preserved only when absent from the incoming row.
-                merged = dict(data)
-                for f in ("parent_task_id", "cost", "output_pointer", "error",
-                          "input_pointer", "model", "expire_at"):
-                    if f not in data and f in existing:
-                        merged[f] = existing[f]
-                rows[key] = merged
+            grouped.setdefault(key, []).append(data)
             if env.get("op") == "save_terminal":
                 terminal.add(key)
+        rows = {
+            key: record
+            for key, seq in grouped.items()
+            if (record := fold_snapshot_rows(seq)) is not None
+        }
         return rows, terminal
 
     # ---------- writer ----------
@@ -93,8 +86,10 @@ class LocalSnapshotPart:
             key = (snapshot.task_id, snapshot.step, snapshot.execution_id)
             existing = rows.get(key)
             if key in terminal and existing is not None:
-                if snapshot.status != existing.get("status", ""):
-                    # T3: state mutation within a terminal generation.
+                # T3: only a non-empty, differing status is a state
+                # mutation. An empty status is the absence of intent
+                # (adjudicated v0.1.5) — it never triggers the guard.
+                if snapshot.status and snapshot.status != existing.get("status", ""):
                     raise TerminalStateViolationError(
                         f"state mutation within terminal generation: {key}"
                     )
@@ -139,7 +134,12 @@ class LocalSnapshotPart:
 
     @staticmethod
     def _sort_key(data: dict, field: str):
-        return str(data.get(field, ""))
+        """Mechanism sort key. No-expiry sorts as infinitely far (ASC last,
+        DESC first) — the string "None" must never join the ordering."""
+        value = data.get(field)
+        if field == "expire_at":
+            return (value is None, str(value) if value is not None else "")
+        return str(value or "")
 
     async def get(
         self,

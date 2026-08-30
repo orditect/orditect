@@ -110,7 +110,21 @@ state regression).
 
 **Verification.** CF-SNP-003 (mutation after terminal state is rejected
 explicitly); CF-SNP-005 (new generation with same task_id is accepted).
-
+> **Revision 0.1.5** (merge semantics adjudication): clarified the merge
+> semantics that the second face of this term implies. An empty status
+> string is the absence of status intent — never a state mutation (this
+> term does not reject it), never a regression (it never overwrites the
+> recorded state). `created_at` is the first write's instant (it never
+> drifts on merge; `updated_at` independently carries the latest write's
+> instant). A `save_terminal` carrying an empty status asserts finality
+> without asserting a new state: on an already-terminal generation it
+> conflicts when the recorded terminal content differs. Rationale: the
+> merge rule was documented since 0.1.4 but had no single executable
+> definition, and the reference adapters diverged (false rejection /
+> silent regression / created_at drift). Impact: behavior changes only on
+> paths previously uncovered by the conformance suite; the new CF-SNP-014
+> pins the adjudicated semantics for every adapter. This is a
+> clarification under evolution-policy rule 2, not a loosening.
 ---
 
 ## T4 — Idempotency
@@ -366,7 +380,15 @@ Rules:
   Appendix B (three-way closure with CF cases).
 - CF-SNP-013 (T3): after a terminal save, non-state fields may still merge
   to complete the record; a sparse same-generation save must not erase them.
-
+- CF-SNP-014 (T3): a sparse same-generation save carrying no status must
+  not regress status nor drift created_at; non-state fields still merge.
+- CF-SNP-015 (T6): sorting by expire_at with mixed expiring/non-expiring
+  records; no-expiry sorts as infinitely far (ASC last, DESC first).
+- CF-VIEW-005 (T6): consumer-tier — out-of-whitelist sort.field raises
+  InvalidQueryError (mirror of CF-SNP-011).
+- CF-VIEW-006 (T6): consumer-tier — out-of-whitelist group_by raises
+  InvalidQueryError (mirror of CF-SNP-012).
+- 
 ## Appendix A2 — Conformance profiles
 
 Certification is tiered because implementations come in three shapes:
@@ -390,10 +412,10 @@ terms they reference (Appendix B).
 |---|---|---|
 | T1  | snapshot/result models + readers | CF-RST-002, CF-SNP-004, CF-AUD-004, CF-VIEW-002; DR-ALL-002 |
 | T2  | composing layer (flow sink)     | review item |
-| T3  | SnapshotWriter + errors         | CF-SNP-003, CF-SNP-005; DR-SNP-001, DR-SNP-002 |
+| T3  | SnapshotWriter + errors         | CF-SNP-003, CF-SNP-005, CF-SNP-013, CF-SNP-014; DR-SNP-001, DR-SNP-002 |
 | T4  | all writers + errors            | CF-AUD-001, CF-AUD-002, CF-SNP-002, CF-SNP-006, CF-DEP-002, CF-DEP-003; DR-AUD-001 |
 | T5  | content writer + snapshot model | CF-CTT-001, CF-CTT-003, CF-CTT-004, CF-CTT-005 (+review); DR-CTT-001 |
-| T6  | all opaque-string fields        | review (+golden) + CF-AUD-003, CF-AUD-005, CF-SNP-007, CF-SNP-008, CF-SNP-009, CF-SNP-011, CF-SNP-012, CF-VIEW-004; DR-ALL-003 |
+| T6  | all opaque-string fields        | review (+golden) + CF-AUD-003, CF-AUD-005, CF-SNP-007, CF-SNP-008, CF-SNP-009, CF-SNP-011, CF-SNP-012, CF-SNP-015, CF-VIEW-004, CF-VIEW-005, CF-VIEW-006; DR-ALL-003 |
 | T7  | all datetime fields             | unit/golden tests (+review); DR-ALL-001 |
 | T8  | CapabilitySet + all protocols   | kit self-pinning tests (skip/red) |
 | T9  | errors taxonomy + sinks         | review (+kit self-pinning) |

@@ -53,25 +53,42 @@ async def scan_dependency_cycles(dep_graph_store: Any) -> list[list[str]]:
     return cycles
 
 
-async def rebuild_dep_counters(storage: Any, dep_graph_store: Any) -> dict[str, int]:
+async def rebuild_dep_counters(
+    storage: Any,
+    dep_graph_store: Any,
+    *,
+    success_words: frozenset[str] = frozenset({"succeeded"}),
+    terminal_words: frozenset[str] = frozenset(
+        {"succeeded", "failed", "cancelled"}
+    ),
+    lifecycle: Any = None,
+) -> dict[str, Any]:
     """Rebuild remaining_deps counters from the cold store (admin recovery).
 
-    Intended use: Redis restarted and lost counters/sets. Formula per
-    child: running_parents = parents - (terminal parents). Terminal
-    parents that are not success re-add their cancel vote (failure votes
-    are re-derivable from cold state); vote sets for children whose
-    votes came from live vote_cancel calls may be incomplete afterward —
-    the admin path is best-effort by definition.
+    Intended use: Redis restarted and lost counters/sets. v0.1.5 hardening:
+    - a child with ANY missing parent hot record is skipped AS A WHOLE
+      (was: silently under-counted -> premature readiness);
+    - threshold-reaching votes trigger lifecycle.cancel when injected, and
+      are always reported (was: silently dangling);
+    - status vocabulary is caller-declared (was: hardcoded, violating T6).
 
     Returns:
-        {"rebuilt": int, "skipped": int, "errors": int}
+        {"rebuilt": int, "skipped": int, "skipped_children": list[str],
+         "cancelled": list[str], "pending_cancel": list[str], "errors": int}
     """
     edges = await dep_graph_store.all_edges()
     parents_of: dict[str, list[str]] = {}
     for edge in edges:
         parents_of.setdefault(edge.child_id, []).append(edge.parent_id)
 
-    stats = {"rebuilt": 0, "skipped": 0, "errors": 0}
+    stats: dict[str, Any] = {
+        "rebuilt": 0,
+        "skipped": 0,
+        "skipped_children": [],
+        "cancelled": [],
+        "pending_cancel": [],
+        "errors": 0,
+    }
     for child_id, parents in parents_of.items():
         try:
             child_rec = await storage.get_task(child_id)
@@ -80,25 +97,40 @@ async def rebuild_dep_counters(storage: Any, dep_graph_store: Any) -> dict[str, 
                 continue
 
             running = 0
+            reached_cancel = False
+            missing_parent = False
             for parent_id in parents:
                 parent_rec = await storage.get_task(parent_id)
                 if not parent_rec:
-                    # parent hot record lost: conservative skip — cold
-                    # records alone cannot prove the parent's status
-                    stats["skipped"] += 1
-                    continue
+                    # A missing parent hot record means the cold record alone
+                    # cannot prove the parent's status — under-counting would
+                    # risk premature readiness, so skip the whole child.
+                    missing_parent = True
+                    break
                 status = parent_rec.get("status", "")
-                if status in ("succeeded", "failed", "cancelled"):
-                    if status != "succeeded":
-                        await storage.vote_and_check_threshold(
+                if status in terminal_words:
+                    if status not in success_words:
+                        if await storage.vote_and_check_threshold(
                             child_id, parent_id, len(parents)
-                        )
+                        ):
+                            reached_cancel = True
                 else:
                     running += 1
                     await storage.sadd_active_child(parent_id, child_id)
 
+            if missing_parent:
+                stats["skipped_children"].append(child_id)
+                continue
+
             await storage.set_remaining_deps(child_id, running)
             stats["rebuilt"] += 1
+
+            if reached_cancel:
+                if lifecycle is not None:
+                    await lifecycle.cancel(child_id)
+                    stats["cancelled"].append(child_id)
+                else:
+                    stats["pending_cancel"].append(child_id)
         except Exception as e:
             stats["errors"] += 1
             logger.error(f"counter rebuild failed: {child_id}, {e}")
