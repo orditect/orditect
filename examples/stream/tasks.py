@@ -16,7 +16,6 @@ from orditect.stream import (
     DEFAULT_CONFIG,
     EnrichMode,
     MockVectorEnricher,
-    SourceChunk,
     SourceRequest,
     StageConfig,
     SourceType,
@@ -42,23 +41,21 @@ class CollectTask(BaseBackEndTask):
         await asyncio.sleep(0.2)
         return {"docs": ["doc-alpha", "doc-beta"]}
 
+class _AsyncCancelToken:
+    """Adapt the stream-side CancellationToken to the async duck type the
+    flow-side governed clients await.
 
-class _GovernedSource:
-    """LLM source that streams via raw httpx, with explicit governance.
-
-    Streams through GovernedCallClient.call_streaming for sem/budget/audit.
-    The cancel_token is handled defensively (orditect's CancellationToken
-    is async; a duck-typed sync token would break a bare await).
+    orditect-stream's CancellationToken.is_cancelled() is synchronous;
+    GovernedCallClient does `await token.is_cancelled()`. Forwarding the
+    raw token would raise TypeError there, so the source wraps it instead
+    of touching any bridge internals.
     """
 
-    def __init__(self, llm) -> None:
-        self._llm = llm
+    def __init__(self, token) -> None:
+        self._token = token
 
-    @staticmethod
-    async def _is_cancelled(token) -> bool:
-        if token is None:
-            return False
-        fn = getattr(token, "is_cancelled", None)
+    async def is_cancelled(self) -> bool:
+        fn = getattr(self._token, "is_cancelled", None)
         if fn is None:
             return False
         import inspect
@@ -67,64 +64,42 @@ class _GovernedSource:
             return bool(await result)
         return bool(result)
 
+
+class _GovernedSource:
+    """LLMSourceProtocol adapter over the bridge's PUBLIC stream() API.
+
+    Maps SourceRequest.payload onto GovernedLLMClient.stream()'s public
+    kwargs — governance (semaphore / budget / audit / pointer-ization)
+    stays entirely inside the bridge. No private-attribute access (the
+    previous version reached into llm._call / llm._model / llm._base,
+    which the contribution discipline forbids).
+
+    call_id travels via the public call_id kwarg, so it lands as the
+    dual-habitat idempotency key (audit event_id == quota task_id)
+    instead of leaking into the HTTP request body.
+
+    include_usage=False keeps the stream working on OpenAI-compatible
+    endpoints that silently return an empty body when stream_options is
+    present (some Ollama builds; developer guide Ch.3.5). cost_fn then
+    receives None and the call is priced at 0 units (A5), matching the
+    previous raw-httpx behaviour.
+    """
+
+    def __init__(self, llm) -> None:
+        self._llm = llm
+
     async def stream(self, request: SourceRequest, cancel_token=None):
-        import json as _json
-        import httpx as _httpx
-
-        payload = {
-            "model": self._llm._model,
-            "messages": request.payload["messages"],
-            "stream": True,
-        }
-        headers = {"Content-Type": "application/json"}
-        if self._llm._api_key:
-            headers["Authorization"] = f"Bearer {self._llm._api_key}"
-
-        async def _gen():
-            async with _httpx.AsyncClient(timeout=120.0) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self._llm._base}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                ) as resp:
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if await self._is_cancelled(cancel_token):
-                            continue
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            obj = _json.loads(data)
-                        except _json.JSONDecodeError:
-                            continue
-                        choices = obj.get("choices") or []
-                        if choices:
-                            text = (choices[0].get("delta") or {}).get("content")
-                            if text:
-                                yield SourceChunk(text=text)
-            yield SourceChunk(finish=True)
-
-        governed = self._llm._call.call_streaming(
-            handler=_gen,
-            cancel_token=None,  # cancel handled inside _gen (defensively)
+        async for chunk in self._llm.stream(
+            messages=request.payload["messages"],
             call_id=request.payload.get("call_id"),
-            result_fn=lambda: None,
-            partial_fn=None,
-        )
-        try:
-            async for chunk in governed:
-                yield chunk
-        finally:
-            aclose = getattr(governed, "aclose", None)
-            if aclose is not None:
-                try:
-                    await aclose()
-                except RuntimeError:
-                    pass
+            cancel_token=(
+                _AsyncCancelToken(cancel_token)
+                if cancel_token is not None
+                else None
+            ),
+            include_usage=False,
+        ):
+            yield chunk
 
 
 class StreamAnalyzeTask(BaseBackEndTask):
@@ -169,7 +144,6 @@ class StreamAnalyzeTask(BaseBackEndTask):
             ),
             loading_url="https://oss.example.com/loading.jpg",
         )
-        import sys as _sys
         collected_text: list[str] = []
 
         async for envelope, event_type in runner.run():
