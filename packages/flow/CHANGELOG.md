@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.7] - TBD
 
+
 ### Fixed
 - `GovernedCallClient.call_streaming`: the handler's generator is now
   deterministically aclosed in finally (aclose cascade) — inner resources
@@ -35,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution, so a failed action is not retried on re-delivery within the
   bounded dedup window. Use a persistent queue with explicit retry when a
   delivery guarantee is required.
+
+### Fixed
+- Recovery rerun after cancel/pause: `_rerun_node` drains the executor's
+  running + shielded finalize tasks before `reopen_task`, and
+  `_finalize_cancel` pins the cancelled snapshot to the captured
+  `execution_id`. Fixes a T11 race where the old generation's cancelled
+  snapshot was written into the new generation (and the old one lost).
 
 ## [0.1.6] - TBD
 

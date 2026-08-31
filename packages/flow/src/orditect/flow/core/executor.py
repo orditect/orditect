@@ -204,16 +204,24 @@ class TaskExecutor:
             return False
 
     async def _write_snapshot(self, task_id: str, status: str, terminal: bool,
-                              error: Exception | None = None) -> None:
+                              error: Exception | None = None,
+                              execution_id: str = "") -> None:
         """F2: write execution snapshot (T9 non-blocking, T11 execution_id from
         the core hot record). Failures are logged and swallowed — snapshot is
         observation, never blocks the task path."""
         try:
-            rec = await self.storage.get_task(task_id)
+            if execution_id:
+                rec = await self.storage.get_task(task_id)
+                eid = execution_id
+                parent = rec.get("parent_task_id")
+            else:
+                rec = await self.storage.get_task(task_id)
+                eid = rec.get("execution_id", "")
+                parent = rec.get("parent_task_id")
             await self._snapshot_sink.write(
                 task_id=task_id,
-                execution_id=rec.get("execution_id", ""),
-                parent_task_id=rec.get("parent_task_id"),
+                execution_id=eid,
+                parent_task_id=parent,
                 status=status,
                 terminal=terminal,
                 error=str(error) if error else None,
@@ -335,11 +343,21 @@ class TaskExecutor:
             else:
                 await self._safe_hook(task.on_cancel, task_id)
 
-    async def _finalize_cancel(self, task_id: str, task: BaseBackEndTask) -> None:
+    async def _finalize_cancel(self, task_id: str, task: BaseBackEndTask,
+                               execution_id: str = "") -> None:
         """Write chain for cancellation finalization (wrapped by
-        _shielded_finalize). Hook calls are wrapped in try/except (T9)."""
+        _shielded_finalize). Hook calls are wrapped in try/except (T9).
+
+        execution_id is captured by the caller at cancel time: by the time
+        this shielded background task runs, a concurrent reopen may already
+        have advanced the hot record to a new generation, so re-reading it
+        here would write the cancelled snapshot into the WRONG generation.
+        """
         await self._update_terminal(task_id, {"status": TaskStatus.CANCELLED.value})
-        await self._write_snapshot(task_id, TaskStatus.CANCELLED.value, terminal=True)
+        await self._write_snapshot(
+            task_id, TaskStatus.CANCELLED.value, terminal=True,
+            execution_id=execution_id,
+        )
         await self._safe_hook(task.on_cancel, task_id)
     # ---------- main execution flow ----------
 
@@ -472,7 +490,18 @@ class TaskExecutor:
 
         except asyncio.CancelledError:
             logger.info(f"Task cancelled: {task_id}")
-            await self._shielded_finalize(self._finalize_cancel(task_id, task))
+            # Capture the current generation BEFORE shielding: a concurrent
+            # reopen_task may advance the hot record's execution_id while the
+            # shielded finalize runs, and the cancelled snapshot must still be
+            # written into THIS generation (T11), not the reopened one.
+            try:
+                _rec = await self.storage.get_task(task_id)
+                _eid = _rec.get("execution_id", "")
+            except Exception:
+                _eid = ""
+            await self._shielded_finalize(
+                self._finalize_cancel(task_id, task, execution_id=_eid)
+            )
             raise
 
         except Exception as e:

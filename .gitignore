@@ -11,7 +11,9 @@ dist/
 build/
 .pytest_cache/
 .idea/
+.env
 
-
+# test & demo
 vocabulary-advisory.txt
 flip-ledger-0.1.2.md
+examples/*/demo_data/

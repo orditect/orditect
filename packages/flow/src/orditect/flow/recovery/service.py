@@ -176,6 +176,24 @@ class RecoveryService:
         reopened node the F3 query sees the NEW generation (no success
         snapshot yet), so it executes.
         """
+        # 0. Wait for any in-flight finalization of the PREVIOUS generation
+        #    to drain before reopening. The finalize task may not have been
+        #    registered yet at the instant we check (it is created inside the
+        #    cancelled executor's shield), so poll briefly instead of a
+        #    single snapshot read.
+        import time as _time
+        deadline = _time.monotonic() + 5.0
+        while _time.monotonic() < deadline:
+            running = getattr(self._executor, "_running_tasks", {})
+            finalize = getattr(self._executor, "_finalize_tasks", set())
+            busy = (
+                    task_id in running
+                    or any(not t.done() for t in list(finalize))
+            )
+            if not busy:
+                break
+            await asyncio.sleep(0.02)
+
         # 1. Hot-path new generation (T3-safe: reopen, not state regression)
         await self._storage.reopen_task(task_id)
         # 2. v0.1.1: invalidate the exemption snapshot frozen at registration
