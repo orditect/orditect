@@ -106,6 +106,18 @@ receipt = await sink.pause_node("task-123")  # HITL/MCP/agent intervention
 ```
 See `docs/integration-guide.md` for the complete integration guide.
 
+## Examples
+
+| Example | What it proves | Prereqs |
+| :--- | :--- | :--- |
+| [`examples/mvp`](examples/mvp/) | The full governance loop with **zero infrastructure** — local trace bundle, mock LLM bridge, workflow visualization, HITL pause/retry/resume, `run_rules` certification. | none — `pip install -r requirements.txt && python run_demo.py` |
+| [`examples/real-world`](examples/real-world/) | **Hot/cold replaceability**: the SAME business code runs on the production hot path (Redis trio) + a real OpenAI-compatible LLM. | Redis + any OpenAI-compatible endpoint (Ollama / vLLM / OpenAI); `cp .env.example .env` |
+
+Both demos run the identical workflow (`collect -> analyze -> report`,
+plus a slow node for pause/resume) and end with `run_rules` reporting zero
+violations over the produced trace bundle.
+
+
 ## Documentation
 
 | Document | Description |

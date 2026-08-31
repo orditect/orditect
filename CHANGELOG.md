@@ -62,6 +62,23 @@
   fallback (close the coroutine, log, skip), strong-ref set with
   done-callback drain + exception retrieval. New pins.
 
+### Fixed
+- **flow: pause-then-resume could corrupt the new generation's snapshot (T11)**.
+  `RecoveryService._rerun_node` now drains the executor's in-flight
+  finalization (running + shielded finalize tasks) before reopening a new
+  generation. Previously, rerunning a node immediately after a cancel/pause
+  let the previous generation's shielded `_finalize_cancel` run AFTER
+  `reopen_task` had advanced the hot record's `execution_id`, writing the
+  old generation's cancelled snapshot into the NEW generation (a
+  `TerminalStateViolationError` on the snapshot sink, surfaced as a T9
+  warning) and leaving the OLD generation's terminal snapshot unwritten.
+- **flow: `TaskExecutor._finalize_cancel` captures `execution_id` at cancel
+  time** (instead of re-reading the hot record inside the shielded
+  background task). The cancelled snapshot is now always written into the
+  generation that was actually cancelled, even when a concurrent reopen
+  races the finalize. `_write_snapshot` gained an explicit `execution_id`
+  override for this.
+
 ## [0.1.6] - TBD
 
 **v0.1.6 = correctness + hygiene release.** No new capabilities — every
