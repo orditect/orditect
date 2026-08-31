@@ -39,7 +39,7 @@ class AnalyzeTask(BaseBackEndTask):
         eid = record.get("execution_id", "")
         result = await self._llm.chat(
             messages=[{"role": "user", "content": "Analyze the collected docs"}],
-            call_id=f"report-{task_id}-{eid}",
+            call_id=f"analyze-{task_id}-{eid}",
         )
         return {"analysis": result["choices"][0]["message"]["content"]}
 
@@ -64,7 +64,7 @@ class ReportTask(BaseBackEndTask):
         eid = record.get("execution_id", "")
         result = await self._llm.chat(
             messages=[{"role": "user", "content": "Write the final report"}],
-            call_id=f"analyze-{task_id}-{eid}",
+            call_id=f"report-{task_id}-{eid}",
         )
         return {"report": result["choices"][0]["message"]["content"]}
 
