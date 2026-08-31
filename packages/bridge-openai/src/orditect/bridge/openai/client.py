@@ -1,3 +1,4 @@
+
 """GovernedLLMClient: OpenAI-compatible endpoint bridge (endpoint tier).
 
 Wraps any OpenAI-compatible chat-completions endpoint in the governed-call
@@ -153,18 +154,17 @@ class GovernedLLMClient:
             model: str | None = None,
             cancel_token: Any = None,
             call_id: str | None = None,
+            include_usage: bool = True,
             **kwargs,
     ) -> AsyncIterator[SourceChunk]:
         """Streaming governed call implementing LLMSourceProtocol.
 
-        Accepts either a SourceRequest (orditect-stream entry) or explicit
-        messages= kwargs (direct use). Yields SourceChunk(text=...) deltas and
-        a final SourceChunk(finish=True).
-
-        Closing discipline (v0.1.7): closing this generator deterministically
-        acloses the governed stream (whose own finally closes the HTTP stream
-        and releases the semaphore) — resource cleanup never relies on GC
-        timing.
+        include_usage: when True (default), requests stream_options
+        .include_usage so the endpoint reports token usage on the final
+        chunk. Set False for OpenAI-compatible endpoints that choke on or
+        silently ignore stream_options (e.g. some Ollama versions) — the
+        stream then works, and cost_fn receives None (A5: the business
+        prices the usage-missing call).
         """
         if request is not None:
             payload = dict(request.payload)
@@ -175,7 +175,7 @@ class GovernedLLMClient:
         if model is not None:
             payload["model"] = model
         payload.update(kwargs)
-        body = self._payload(stream=True, **payload)
+        body = self._payload(stream=True, include_usage=include_usage, **payload)
 
         result_holder: dict[str, Any] = {}
         partial: list[str] = []
@@ -242,7 +242,7 @@ class GovernedLLMClient:
 
     # ---------- internals ----------
 
-    def _payload(self, stream: bool = False, **kwargs) -> dict:
+    def _payload(self, stream: bool = False, include_usage: bool = True, **kwargs) -> dict:
         body: dict[str, Any] = {
             k: v for k, v in kwargs.items() if v is not None
         }
@@ -250,7 +250,8 @@ class GovernedLLMClient:
             body["model"] = self._model
         if stream:
             body["stream"] = True
-            body.setdefault("stream_options", {"include_usage": True})
+            if include_usage:
+                body.setdefault("stream_options", {"include_usage": True})
         return body
 
     def _headers(self) -> dict[str, str]:
