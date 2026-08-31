@@ -117,6 +117,8 @@ replaceability:
 | [`examples/mvp`](examples/mvp/) | The full governance loop with **zero infrastructure** — local trace bundle, mock LLM bridge, recursive workflow, visualization, HITL pause/retry/resume, `run_rules` certification. | none | `pip install -r requirements.txt && python run_demo.py` |
 | [`examples/real-world`](examples/real-world/) | **Hot/cold replaceability** — the SAME business code on the production hot path (Redis trio) + a real OpenAI-compatible LLM, with real token metering. | Redis + any OpenAI-compatible endpoint (Ollama / vLLM / OpenAI) | `cp .env.example .env`, then `pip install -r requirements.txt && python run_demo.py` |
 | [`examples/stream`](examples/stream/) | **The output plane** — a governed node streams its LLM output to end users via the SSE protocol (delta / enrich placeholders / manifest / cancel), while staying fully governed. | same as real-world | `cp .env.example .env`, then `pip install -r requirements.txt && python run_demo.py` |
+| [`examples/governed-client`](examples/governed-client/) | **The community integration entry point** — wrap any existing callable in governance (`GovernedClient` / `GovernedCallClient`: semaphore, budget, audit, call_id, streaming lifecycle) without building a workflow. | none | `pip install -r requirements.txt && python run_demo.py` |
+| [`examples/dependency-governance`](examples/dependency-governance/) | **Multi-parent fan-in** — C runs only after A AND B finish: the full `DependencyGovernor` lifecycle (register / notify / readiness / voting) with zero infrastructure. | none | `pip install -r requirements.txt && python run_demo.py` |
 
 All three run the identical workflow (`collect -> analyze -> report`,
 plus a slow node for pause/resume) and end with `run_rules` reporting
@@ -138,6 +140,7 @@ settlement, and the recovery plane — lives at
 | [Flow Recovery](packages/flow/docs/recovery.md) | Resume / rerun design, execution dispatch, and pause semantics. |
 | [Stream Protocol](packages/stream/docs/protocol.md) | SSE event schema, cancel sequences, and pause/resume decisions. |
 | [Adapter Guide](packages/protocol/README.md) | How to implement a storage adapter and run the conformance suite. |
+| [Stability Commitments](docs/stability.md) | What you may rely on across releases (frozen / stable / ratifying / internal). |
 | [Integration Guide](docs/integration-guide.md) | Three-category integration with certification checklist. |
 ---
 

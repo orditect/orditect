@@ -40,11 +40,22 @@ class SourceChunk:
 class LLMSourceProtocol(Protocol):
     """LLM source protocol."""
 
-    async def stream(self, request: SourceRequest) -> AsyncIterator[SourceChunk]:
+    async def stream(
+        self,
+        request: SourceRequest,
+        cancel_token: Any = None,
+    ) -> AsyncIterator[SourceChunk]:
         """Stream deltas.
 
         Args:
             request: Source request (business-defined payload)
+            cancel_token: Optional cancellation token passed by the caller
+                (e.g. StageRunner forwards the substream's token). Duck-typed:
+                the source may treat it as opaque — check `is_cancelled()`
+                (sync or async) or ignore it entirely. Added v0.1.x: the
+                parameter already existed at every call site and in every
+                implementation (StageRunner, GovernedLLMClient, test doubles);
+                this declaration catches up with reality.
 
         Yields:
             SourceChunk deltas; ends with a finish=True chunk (or natural end)

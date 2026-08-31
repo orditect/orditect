@@ -275,6 +275,10 @@ demos against one Redis, give each a distinct `root_task_id` (e.g.
 redis-cli -u "$REDIS_URL" --scan --pattern "admission:budget:<scope>:*" \
   | xargs -r redis-cli -u "$REDIS_URL" del
 ```
+> **Resource discipline**: every semaphore name you `acquire` must be
+> registered first (R16). If you add custom call sites (OCR, vector
+> search, image ops), register them in `build_hot_path()` exactly like
+> `"llm"` and `"task_execution"`, or the first acquire raises `KeyError`.
 
 ### 3.5 Real LLM notes
 
@@ -393,6 +397,15 @@ Two-layer governance, memorized:
 - **call layer** (`GovernedClient(resource=...)`): held per call.
 
 They are independent pools and compose freely.
+
+### 4.4a A runnable recipe (the community integration entry point)
+
+`examples/governed-client` is a single-file, zero-infrastructure demo of
+this exact pattern: `GovernedClient` and `GovernedCallClient` wrapping a
+plain callable, with `cost_fn` pricing, `call_id` dual-habitat
+idempotency, the streaming semaphore lifecycle, and the usage-missing
+(A5) pricing path. If you only read one example before embedding
+Orditect into existing code, read that one.
 
 ### 4.5 Registering the node for recovery (task_factory)
 
@@ -767,6 +780,17 @@ semantics — those stay with you (or your external orchestrator).
 > Most first workflows (linear pipelines, recursive composition) do NOT
 > need this chapter. Read it when you have fan-in: "C runs only after A
 > AND B finish."
+> The runnable companion for this chapter is
+> [`examples/dependency-governance`](dependency-governance/) — it drives the
+> full register / notify / readiness / voting lifecycle with zero
+> infrastructure, including the hang-prevention vote path and the
+> graph-vs-tree observability distinction from Chapter 7.
+
+> The runnable companion for this chapter is
+> [`examples/dependency-governance`](dependency-governance/) — it drives
+> the full register / notify / readiness / voting lifecycle with zero
+> infrastructure, including the hang-prevention vote path and the
+> graph-vs-tree observability distinction from Chapter 7.
 
 ### 8.1 Construction (vocabulary is caller-declared)
 
@@ -855,10 +879,13 @@ bridge) is your responsibility. All its failures are logged, never raised
   anomaly is logged as a warning, not an error;
 - If you never call `notify_task_terminal`, counters never move and the
   child stays pending — **that is the caller's contract, no compensation
-  exists**;
+  exists**. Wire it at every task-closure point (the demos show the
+  pattern: submit -> wait_terminal -> notify).
 - After a Redis restart, counters/sets can be rebuilt from the cold store:
   `rebuild_dep_counters(storage, dep_graph_store)` (see
   `flow/docs/governance.md` for its report fields).
+
+
 
 ### 8.7 The exemption snapshot (advanced, one paragraph)
 
@@ -976,7 +1003,31 @@ as a source. Two ready options:
   audit); pass `include_usage=False` for endpoints that reject
   `stream_options` (some Ollama builds);
 - a raw httpx stream wrapped in `GovernedCallClient.call_streaming` —
-  the shape `examples/stream` uses, for full control over the wire format.
+  for full control over the wire format.
+
+**call_id caveat (idempotency)**: `SourceRequest.payload` is an opaque
+business dict — the runner never interprets it, so a `call_id` placed
+there does NOT become the dual-habitat idempotency key (it would only
+leak into the HTTP request body). The key must travel via the source's
+own public channel, e.g. `GovernedLLMClient.stream(call_id=...)`. When
+you wire `GovernedLLMClient` as a stage source, map it explicitly:
+
+```python
+class MySource:
+    def __init__(self, llm) -> None:
+        self._llm = llm
+
+    async def stream(self, request: SourceRequest, cancel_token=None):
+        async for chunk in self._llm.stream(
+            messages=request.payload["messages"],
+            call_id=request.payload.get("call_id"),   # public kwarg
+            include_usage=False,
+        ):
+            yield chunk
+```
+
+(`examples/stream/tasks.py::_GovernedSource` is this exact shape, plus
+an async wrapper for the stream-side sync CancellationToken — see Ch.9.6.)
 
 `SourceChunk` fields: `text` (content delta), `thinking` (reasoning
 delta), `references` (citation list), `finish` (terminal flag). A chunk
@@ -1287,7 +1338,9 @@ You never manage `execution_id` yourself — but this alignment is why
    (`TaskOrchestrator(snapshot_sink=ProtocolSnapshotSink(store.snapshot))`);
 2. **Register every semaphore resource before first acquire** (R16
    `KeyError` otherwise) — at minimum `task_execution` and your call-site
-   resources;
+   resources (`llm`, `vector_search`, ...). Registration is idempotent;
+   re-registering with different params only logs a warning, the first
+   registration wins.
 3. **Declare vocabularies up front**: `reuse_terminal_words` (recovery),
    `success_words` (DependencyGovernor) — both reject empty sets;
 4. **Register every rerunnable node in `task_factory`** or recovery skips
@@ -1336,6 +1389,7 @@ plus `0 violations`.
 | Lua script / Redis key internals | `packages/core/docs/lua_contract.md` |
 | The 12 normative terms (T1-T12) | `packages/protocol/docs/terms.md` |
 | Roadmap, commercial options, what we will NOT do | `docs/ROADMAP.md` |
+| Stability commitments (frozen vs ratifying surfaces) | `docs/stability.md` |
 
 The contribution discipline when you extend the framework itself:
 public injection points only (sinks, protocols, `task_factory`, gateway
