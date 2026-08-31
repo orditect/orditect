@@ -108,15 +108,24 @@ See `docs/integration-guide.md` for the complete integration guide.
 
 ## Examples
 
-| Example | What it proves | Prereqs |
-| :--- | :--- | :--- |
-| [`examples/mvp`](examples/mvp/) | The full governance loop with **zero infrastructure** — local trace bundle, mock LLM bridge, workflow visualization, HITL pause/retry/resume, `run_rules` certification. | none — `pip install -r requirements.txt && python run_demo.py` |
-| [`examples/real-world`](examples/real-world/) | **Hot/cold replaceability**: the SAME business code runs on the production hot path (Redis trio) + a real OpenAI-compatible LLM. | Redis + any OpenAI-compatible endpoint (Ollama / vLLM / OpenAI); `cp .env.example .env` |
+Three runnable examples, one progressive path — each proves a distinct
+capability, and they share the same business code to prove hot/cold
+replaceability:
 
-Both demos run the identical workflow (`collect -> analyze -> report`,
-plus a slow node for pause/resume) and end with `run_rules` reporting zero
-violations over the produced trace bundle.
+| Example | What it proves | Prereqs | Run |
+| :--- | :--- | :--- | :--- |
+| [`examples/mvp`](examples/mvp/) | The full governance loop with **zero infrastructure** — local trace bundle, mock LLM bridge, recursive workflow, visualization, HITL pause/retry/resume, `run_rules` certification. | none | `pip install -r requirements.txt && python run_demo.py` |
+| [`examples/real-world`](examples/real-world/) | **Hot/cold replaceability** — the SAME business code on the production hot path (Redis trio) + a real OpenAI-compatible LLM, with real token metering. | Redis + any OpenAI-compatible endpoint (Ollama / vLLM / OpenAI) | `cp .env.example .env`, then `pip install -r requirements.txt && python run_demo.py` |
+| [`examples/stream`](examples/stream/) | **The output plane** — a governed node streams its LLM output to end users via the SSE protocol (delta / enrich placeholders / manifest / cancel), while staying fully governed. | same as real-world | `cp .env.example .env`, then `pip install -r requirements.txt && python run_demo.py` |
 
+All three run the identical workflow (`collect -> analyze -> report`,
+plus a slow node for pause/resume) and end with `run_rules` reporting
+zero violations over the produced trace bundle.
+
+**Building your own workflow?** The full developer guide — mental model,
+recursive composition, DAG observability, SSE output, HITL, budget
+settlement, and the recovery plane — lives at
+[`examples/README.md`](examples/README.md).
 
 ## Documentation
 
