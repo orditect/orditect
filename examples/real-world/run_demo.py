@@ -103,7 +103,7 @@ async def main() -> None:
         store.snapshot,
         orchestrator.executor,
         reuse_terminal_words=frozenset({"succeeded"}),
-        task_factory=make_task_factory(storage, llm, fail_flags),
+        task_factory=make_task_factory(storage, llm, fail_flags, orchestrator),
     )
 
     queue = MemoryActionQueue()
@@ -189,6 +189,7 @@ async def main() -> None:
         print("\nDEMO OK - trace bundle at:", TRACE_DIR)
     finally:
         await dispatcher.stop()
+        await orchestrator.wait_all_finalized()  # drain bg + finalize tasks
         await redis_client.aclose()
 
 
