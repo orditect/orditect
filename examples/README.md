@@ -248,6 +248,12 @@ registry.register_semaphore("task_execution", client, limit=10)   # task boundar
 registry.register_semaphore("llm", client, limit=30)              # LLM call site
 registry.register_semaphore("vector_search", client, limit=5)     # any custom resource
 ```
+**Naming is yours**: a resource name is an opaque string with no
+framework-side vocabulary — `"node_sem_1"`, `"llm_1"`, `"ocr_pool"`,
+`"image_ops"` are all equally valid. The only rule is that registration
+and acquisition use the same string. Names seen in the docs and demos
+(`"task_execution"`, `"llm"`, and the stream package's
+`"default_stream_llm"`) are conventions, not reserved words.
 
 ### 3.3 Configuration discipline (.env)
 
@@ -1037,7 +1043,32 @@ Rules consumers depend on:
 
 ### 9.4 Rich-media placeholders (the signature feature)
 
-When the model emits the marker `![img]`, the framework:
+When the model emits the configured marker (`"![img]"` by default —
+this is a prompt contract between you and the model, not a fixed
+framework constant), the framework:
+**The marker is configurable** — `StreamConfig.marker` accepts any
+string your prompt contract uses:
+
+```python
+config = DEFAULT_CONFIG.merge(marker="[[A2UI]]")   # or "{{chart}}", ...
+```
+
+Related knobs on `StreamConfig`:
+
+- `marker_flush_threshold` / `marker_flush_timeout` — tune how
+  aggressively the detector flushes buffered text around a possible
+  (incomplete) marker;
+- `enrich_context_strategy` (`"paragraph"` / `"heading"` / `"full"`) —
+  how much pre-marker text is handed to your enricher as
+  `context_text`.
+
+**Limit**: the marker is a single literal string per run — not a
+regex, not a set of markers, and shared by all stages of the run. If
+your format has several placeholder kinds (chart, table, card), keep
+one marker and let your enricher decide the kind from the extracted
+`context_text` (put the type hint in the text *before* the marker in
+your prompt contract), since any text after the marker continues to
+stream out as normal content.
 
 1. detects it mid-stream (split-marker safe across chunk boundaries),
 2. emits `enrich.marker` + `enrich.placeholder` (with `char_offset` —
@@ -1582,3 +1613,130 @@ The contribution discipline when you extend the framework itself:
 public injection points only (sinks, protocols, `task_factory`, gateway
 wrappers) — never monkey-patch underscore-prefixed internals, never
 hand-roll a `reopen` outside `task_reopen.lua`.
+
+
+
+## Appendix E — Field notes: pitfalls discovered while building demos
+
+These four traps were hit while building a fan-out + streaming-fan-in
+demo with HITL pause/resume on top of the public APIs only. None of
+them is a framework bug; all of them live in the gap between the
+documented contract and the demo-orchestration timing. Listed so the
+next demo author does not have to rediscover them.
+
+### E.1 `get_all_semaphore_status()` return shape is not pinned
+
+The water-level docs (Ch.3.6) pin the five-field format for a single
+resource (`{"name", "limit", "usage", "available", "utilization"}` via
+`get_semaphore_status(name)`), but the **batch** variant
+`get_all_semaphore_status()` does not document its container shape.
+Depending on the implementation it may be a list of status dicts or a
+`{name: status}` mapping whose values may omit the `name` field.
+Iterating the mapping yields bare strings, and `s["name"]` then fails
+with `TypeError: string indices must be integers`.
+
+**Mitigation**: normalize at the consumer, never assume one shape:
+
+```python
+def _normalize_sems(raw) -> list[dict]:
+    if isinstance(raw, dict):
+        out = []
+        for name, status in raw.items():
+            if isinstance(status, dict):
+                entry = dict(status)
+                entry.setdefault("name", name)
+                out.append(entry)
+        return out
+    return [s for s in raw if isinstance(s, dict)]
+```
+
+The same applies to field access: read `usage` with a fallback to
+`in_use`, and degrade missing fields to a display placeholder instead
+of raising — the display is observability only (T9).
+
+### E.2 Interrupted runs leave hot-path residue that short-circuits the next run
+
+Demos commonly use deterministic task ids (`worker-0`, `merge`, ...)
+plus `submit(..., if_not_exists=True)` for parent-retry safety. If a
+previous run was interrupted (Ctrl+C, a crashed demo process), the hot
+records are still in Redis. The next run's `if_not_exists` submit then
+**skips initialization entirely** for those ids: the executor lifecycle
+never runs for them — no semaphore acquire, no `running`/`succeeded`
+snapshots, no audit — while any direct LLM calls in the task body still
+execute and still charge the budget. The visible symptom is a run whose
+console reports workers as succeeded (and whose budget decreased) but
+whose trace bundle contains no snapshot rows for them, followed by
+`DR-DEP-001` warnings ("edge endpoint has no snapshot row").
+
+**Mitigation**: demos with deterministic ids should reset their known
+keys at startup (delete by explicit name, never by pattern):
+
+```python
+async def reset_demo_state(client, root_task_id: str, worker_count: int) -> None:
+    task_ids = [root_task_id, "merge"] + [f"worker-{i}" for i in range(worker_count)]
+    keys = [f"task:{tid}" for tid in task_ids]
+    keys.append(f"admission:budget:{root_task_id}")
+    try:
+        await client.delete(*keys)
+    except Exception as e:
+        print(f"state cleanup best-effort failed (ignored): {e}")  # T9
+```
+
+(Ch.3.4 recommends a dedicated logical DB for isolation; that prevents
+cross-project collisions but NOT residue from your own interrupted runs
+— the explicit reset is still needed.)
+
+### E.3 The resume window is coupled to the run's lifetime, not to your sleep duration
+
+A natural HITL demo beat is: give a worker a cooperative delay after
+its LLM call, pause it mid-delay, then resume the tree. The subtle
+part: `resume_tree` is executed by the run's `ActionDispatcher`, and the
+dispatcher is torn down when the run finishes. If the root task's wait
+logic treats "any terminal state" as done — e.g.
+`asyncio.gather(wait_terminal(wid) for wid in workers)` — then a paused
+worker (terminal: `cancelled`) lets the gather return immediately, the
+root proceeds to the next stage, the run finishes within seconds, and
+your resume arrives at a stopped dispatcher: **silently dropped** (no
+`action_resume` audit event, no new generation — this is the documented
+best-effort behavior of Ch.10.5, but the timing makes it easy to hit by
+accident). Lengthening the worker delay widens the window but never
+removes the race.
+
+**Mitigation**: when the demo needs the pause→resume beat to land
+deterministically, make the root task wait for *success*, not for
+*terminal*: after the gather, poll any `cancelled` child's hot record
+until it becomes `succeeded` (or a timeout fires), and only then
+proceed. The resume action driven by the dispatcher reopens and reruns
+the child; the root's poll observes the status flip and unblocks. Keep
+this strict mode behind a flag — the fault-tolerant "merge with 4/5"
+semantics is often what you want outside the demo.
+
+### E.4 REUSE vs RERUN is decided against the hot record — and `result` lands only after `execute()` returns
+
+RecoveryService's per-node decision (Ch.12.1) is:
+`latest snapshot status in reuse_terminal_words AND the hot record
+carries a result -> REUSE, else RERUN`. The hot record's `result` field
+is written by the executor **after** your `execute()` returns. If your
+demo workers hold a cooperative delay *inside* `execute()` (see E.3),
+then at the moment a `resume_tree` runs, the still-sleeping workers are
+`running` with no `result` — they fail both halves of the predicate and
+are **rerun**, even though their LLM call already succeeded and was
+already billed. Symptom: unexpected second generations
+(`exec-a:succeeded -> exec-b:succeeded`) and duplicate audit rows /
+budget charges for workers you expected to be reused.
+
+**Mitigation** (choose per demo intent):
+
+- keep the cooperative delay short enough that resume lands after the
+  siblings have returned (works, but stays racy — see E.3);
+- scope the resume: `retry_scope(root_id, {"worker-0"})` instead of
+  `resume_tree` when you only intend to revive the paused node;
+- accept the rerun as correct semantics: from the framework's
+  perspective a `running` node with no result genuinely has nothing to
+  reuse. If your task might be rerun, make its `execute()` idempotent
+  or make the expensive part skippable via a marker in the hot record.
+
+Also note the HITL timing window from Ch.5.2 applies throughout: after
+`pause`, a node shows `cancelled` immediately while its coroutine runs
+to its next cooperative check — transient "cancelled but still working"
+states in your views are normal.
