@@ -1,10 +1,14 @@
 # Orditect Developer Guide
 
 Build governed AI workflows **without reading the framework source**. This
-guide covers everything you can build with the open Orditect packages:
-Redis hot path, local-file cold path, adapter-ui visualization, DAG
-observability, SSE output plane, HITL intervention, budget settlement, and
-the recovery plane.
+guide covers the main development loop end-to-end: Redis hot path,
+local-file cold path, adapter-ui visualization, DAG observability, SSE
+output plane, HITL intervention, budget settlement, and the recovery
+plane. A set of secondary public APIs (declarative `Workflow`/DAG,
+retry policies & DLQ, schedulers, callbacks, progress helpers, the token
+bucket and the `@limited` decorator) is intentionally out of the
+walkthrough — they are listed in Appendix D with pointers, and are not
+needed for anything in this guide.
 
 **What this guide is NOT**: adapter development (PostgreSQL / MinIO /
 Milvus), bridge implementations (LangChain / AutoGen / etc.), or a
@@ -221,7 +225,16 @@ async def build_hot_path(redis_url: str, llm_sem_limit: int = 30):
 ```
 
 Everything after this — `TaskOrchestrator`, `BudgetLedger`,
-`RecoveryService`, the tasks themselves — is byte-for-byte the MVP code.
+`RecoveryService`, the task logic itself — is the MVP's business code
+with two deliberate refinements (both are teaching points, not
+infra-related):
+
+- `call_id` now carries the `execution_id`
+  (`f"analyze-{task_id}-{eid}"`), so a same-generation retry dedups
+  while a reopened generation charges anew (see Ch.11.2);
+- `make_task_factory` receives the `orchestrator`, because rebuilding
+  the root `PipelineTask` for recovery requires it (and `PipelineTask`
+  gains a `step_timeout` knob for real LLM latency).
 
 ### 3.2 Semaphore resources you must register
 
@@ -295,6 +308,42 @@ redis-cli -u "$REDIS_URL" --scan --pattern "admission:budget:<scope>:*" \
   `cost_fn` receives `None` (A5: your business prices the usage-missing
   call).
 
+### 3.6 Water-level displays (semaphores, pools, budget)
+
+If you want a dashboard of the "water levels" (水池) mentioned in the
+READMEs, three public query surfaces cover it — all return the same
+five-field format.
+
+```python
+from orditect.core import get_registry, get_pool_manager
+from orditect.flow import GovernorManager
+
+# 1) Semaphore water levels (core registry, direct)
+registry = get_registry()
+one = await registry.get_semaphore_status("llm")
+# {"name": "llm", "limit": 30, "usage": 15,
+#  "available": 15, "utilization": "50.0%"}
+all_sems = await registry.get_all_semaphore_status()
+
+# 2) Flow-side unified outlet (registry first, falls back to the
+#    injected governor; keys say "resource" instead of "name")
+manager = GovernorManager(governor)
+resources = await manager.get_all_resources()
+
+# 3) Redis connection pool level (only when you register pools via the
+#    pool manager instead of building clients by hand)
+pool = await get_pool_manager().get_pool_stats("default")
+# {"name": "default", "max_connections": 200, "in_use": 15, ...}
+```
+
+Budget level is covered by `await budget.balance()` (Ch.11.4); per-call
+usage is in the audit events (Ch.6.1).
+
+**Hard discipline (contract, written in the code):** `usage` / `in_use`
+are **non-atomic approximations — display only, never alert on them**.
+The same applies to snapshot `aggregate(...)` cost sums (1e-9 display
+precision): for reconciliation or billing decisions, use the audit
+domain, not the aggregate.
 ---
 
 ## Chapter 4 — Writing your own task node
@@ -336,9 +385,16 @@ Understanding this explains every snapshot/status you will later read:
 
 1. **R5 pre-check**: if `cancel_requested` is already set, raise
    `CancelledError` immediately (never acquires a slot);
-2. **F3 reuse check** (optional): if the node's latest generation already
-   succeeded and the hot record carries a result, **short-circuit and
-   reuse it** — no slot acquired, no re-execution (Chapter 12);
+2. **F3 reuse check** (optional, OFF by default): if the node's latest
+   generation already succeeded and the hot record carries a result,
+   **short-circuit and reuse it** — no slot acquired, no re-execution
+   (Chapter 12). It is enabled by wiring BOTH
+   `snapshot_query=ProtocolSnapshotQuery(store.snapshot)` and
+   `reuse_terminal_words=frozenset({"succeeded"})` into the
+   `TaskOrchestrator` constructor. With the defaults (null query + empty
+   word set) the check never short-circuits. Note the demos enable this
+   only on the `RecoveryService` side (Ch.12.2), not on the
+   orchestrator — decide explicitly which paths you want reuse on;
 3. **acquire** the `resource_type` semaphore (skipped when an ancestor
    holds the same resource — lineage exemption, Ch.5);
 4. write status `running` + a `save(running)` snapshot;
@@ -471,11 +527,19 @@ tasks:
 
 | API | Mode | Effect |
 |---|---|---|
-| `orchestrator.cancel(id)` | graceful | sets `cancel_requested` on the node **and every descendant** (running nodes finish their segment, then settle as cancelled) |
-| `orchestrator.terminate(id)` | force | additionally cancels the running coroutine in this process (semaphore released immediately) |
+| `orchestrator.cancel(id)` | graceful | sets `cancel_requested` **and transitions the status to `cancelled` immediately**, on the node and every descendant (see the timing note below) |
+| `orchestrator.terminate(id)` | force | additionally cancels the running coroutine **in this process** (semaphore released immediately). Cross-process limit: when the coroutine runs in another process, terminate degrades to a status write (`cancel_requested` + `cancelled` status) — it cannot kill the remote coroutine |
 
 Cascade skips nodes already in a terminal state and is depth-capped
 (`_MAX_CASCADE_DEPTH = 32`) so a lineage cycle cannot loop forever.
+**Cancel timing (read once, avoid confusion)**: `cancel()` does NOT
+wait for the coroutine to finish before changing the status — the
+status becomes `cancelled` immediately, while a running coroutine keeps
+running until its next cooperative check (Ch.4.3). When the coroutine
+exits, the executor idempotently backfills `cancel_outcome` (e.g.
+`"succeeded_but_cancelled"` when the node finished its work after the
+flag was set). So a transient "status is `cancelled` but the coroutine
+is still running" window is normal, not a bug.
 
 ### 5.3 Iron rule 3 — resource lineage exemption (no self-deadlock)
 
@@ -781,12 +845,6 @@ semantics — those stay with you (or your external orchestrator).
 > need this chapter. Read it when you have fan-in: "C runs only after A
 > AND B finish."
 > The runnable companion for this chapter is
-> [`examples/dependency-governance`](dependency-governance/) — it drives the
-> full register / notify / readiness / voting lifecycle with zero
-> infrastructure, including the hang-prevention vote path and the
-> graph-vs-tree observability distinction from Chapter 7.
-
-> The runnable companion for this chapter is
 > [`examples/dependency-governance`](dependency-governance/) — it drives
 > the full register / notify / readiness / voting lifecycle with zero
 > infrastructure, including the hang-prevention vote path and the
@@ -986,12 +1044,23 @@ When the model emits the marker `![img]`, the framework:
    the exact insert position for reassembly),
 3. dispatches an enrich task (your `EnricherProtocol` — vector search,
    image generation, ...),
-4. backfills `enrich.resolved` within the settle window, or records the
-   placeholder in the manifest with its `task_ref` for the client to
-   resolve later.
+4. backfills `enrich.resolved` within the settle window. On timeout the
+   outcome depends on `enrich_mode`:
+   - `TASKFLOW`: the placeholder stays `pending` in the manifest with
+     its `tf:` task_ref; the client resolves it later by polling
+     (`ManifestResolver`).
+   - `LOCAL` / `AUTO`: there is no delegation channel, so the
+     placeholder is marked `failed` with `fallback_url` (the loading
+     image) in the manifest. This is deliberate: nothing can resolve a
+     local job later, so the manifest tells the truth instead of
+     local job later, so the manifest tells the truth instead of
+     leaving a permanently pending reference.
 
 `MockVectorEnricher` is the development stub; production enrichers are
 your own (out of this guide's scope, like other adapters).
+> Note: `examples/stream` runs with `EnrichMode.LOCAL`, so any
+> placeholder that misses the settle window appears in the manifest as
+> `failed` — not as a resolvable `task_ref`.
 
 ### 9.5 The governed source (LLMSourceProtocol)
 
@@ -1043,6 +1112,14 @@ may carry several fields; the pipeline splits them
   executor coroutine, semaphore released immediately, connection dropped.
   Use under resource pressure or a hung LLM.
 
+**Timing contract**: `cancel()` only works **after `runner.run()` has
+started** (the per-stream tokens are created inside `run()`). Calling it
+before `run()`, or with a `stream_id` that was never registered (or has
+already finished), is silently ignored with a warning log — no phantom
+`stream.cancelled` event is emitted. If you wire cancel from an HTTP
+endpoint, make sure the stream has started before accepting cancel
+requests.
+
 Either way, `runner.get_partial_content(sid)` returns everything produced
 up to cancellation — nothing produced is ever lost. On cancel the client
 still receives `stream.cancelled` (with `partial_content`) ->
@@ -1056,6 +1133,42 @@ still receives `stream.cancelled` (with `partial_content`) ->
   (grace-period buffer, drain on reconnect) / `CONTINUE` (run to
   completion, refetch the manifest later).
 
+
+### 9.8 Serving the stream over FastAPI
+
+Chapters 9.1–9.7 run the runner in-process. To expose it as an actual
+SSE endpoint, the stream package ships two helpers:
+
+```python
+from fastapi import FastAPI, Request
+from orditect.stream.fastapi import create_stream_response, make_refetch_router
+
+app = FastAPI()
+app.include_router(make_refetch_router(store))
+# serves GET /taskstream/streams/{stream_id} -> manifest (404 when expired)
+
+@app.get("/stream")
+async def stream(request: Request):
+    runner = StreamRunner(
+        stages=[...], enricher=..., store=store,
+        config=DEFAULT_CONFIG,
+        loading_url="https://oss.example.com/loading.jpg",
+    )
+    return create_stream_response(runner, request)
+```
+
+`create_stream_response` handles, for you:
+
+- SSE frame encoding + headers (`Cache-Control`, `X-Accel-Buffering`);
+- **decoupled heartbeats** (comment frames on a fixed interval, even
+  while the business stream is idle — proxies must never see an idle
+  connection);
+- disconnect awareness (polls `request.is_disconnected()` and feeds
+  your `DisconnectPolicy`, Ch.9.7);
+- deterministic cleanup when the client goes away mid-stream.
+
+You can also pass `heartbeat_interval=` explicitly; otherwise the
+runner's `StreamConfig.heartbeat_interval` is used.
 ---
 
 ## Chapter 10 — HITL: human / MCP / agent intervention
@@ -1077,15 +1190,27 @@ dispatcher = ActionDispatcher(queue, orchestrator, recovery)
 await dispatcher.start()
 ```
 
-Production note: `MemoryActionQueue` is the reference implementation
-(single process, bounded receipt retention). A production deployment uses
-a Redis-backed queue polled by the dispatcher — the sink API is identical.
+Production note: the framework ships **only** `MemoryActionQueue`
+(single process, bounded receipt retention — for demos and tests). For
+production, implement the `ActionQueue` protocol over your own carrier
+(e.g. a Redis list polled by the dispatcher):
 
-### 10.2 The three actions
+- `enqueue(command)` / `dequeue(timeout=...)` /
+  `get_receipt(action_id)` are the required protocol methods;
+- `write_receipt(action_id, receipt)` is optional — the dispatcher
+  calls it when present (a `hasattr` check) to persist execution
+  receipts.
+
+The `ActionSinkAdapter` API is identical regardless of the carrier.
+
+### 10.2 The four actions
 
 ```python
 # Pause a running node (graceful cancel + cascade)
 receipt = await sink.pause_node("slow-node", actor="user-1")
+
+# Retry a single node inside a tree
+receipt = await sink.retry_node("report", root_id, actor="user-1")
 
 # Retry an explicit node set inside a tree (reopen new generations)
 receipt = await sink.retry_scope(root_id, {"report", "analyze"}, actor="user-1")
@@ -1146,6 +1271,24 @@ dispatcher summary.
 
 None of these crash the dispatcher; each is recorded and the loop
 continues (best-effort by design).
+
+### 10.6 Shutdown discipline (avoid "Event loop is closed" noise)
+
+On application shutdown (or Ctrl+C), tear down in this order — the
+stream demo's `finally` block is the reference:
+
+```python
+await dispatcher.stop()                    # 1. stop consuming the action queue
+await orchestrator.wait_all_finalized()    # 2. drain bg tasks + shielded finalize writes
+await redis_client.aclose()                # 3. close external connections last
+```
+
+Why: shielded finalization writes (terminal status, snapshots) may still
+be in flight after the business terminal state; killing the event loop
+first produces `Task was destroyed but it is pending` /
+`Event loop is closed` warnings. `wait_all_finalized(timeout=5.0)`
+explicitly drains them. If you built your own `GovernedLLMClient`,
+also `await llm.aclose()` when you injected no shared `http_client`.
 ---
 
 ## Chapter 11 — Budget and quota: real metering with a hard stop
@@ -1180,6 +1323,15 @@ Semantics you can rely on:
   balance negative; every *subsequent* `check()` then blocks;
 - **Ledger TTL**: the quota lease self-reclaims after `task_ttl_sec`, so
   a crashed run never leaks budget forever.
+- **Optional audit dual-write**: pass `audit_sink=` at construction to
+  persist every charge as a detail record, in addition to the Redis
+  real-time counter:
+The sink implements the `BudgetAuditSink` protocol
+(`record_charge(scope=, call_id=, units=, balance_after=)`); the
+default is `NullAuditSink` (counter only, no persisted details). Calls
+are wrapped in try/except — an audit failure never blocks settlement
+(T9). Implementations must dedup on `call_id` (the same key as the hot
+path, Ch.11.2), so a retried charge does not produce a duplicate record.
 
 ### 11.2 call_id — the dual-habitat idempotency key (important)
 
@@ -1196,7 +1348,8 @@ Discipline:
   double audit);
 - **New logical call -> new call_id**.
 
-The clean pattern (used in the demos): include the `execution_id`, so a
+The clean pattern (used in the real-world / stream demos; the MVP omits
+the suffix for simplicity): include the `execution_id`, so a
 same-generation retry dedups while a reopened generation (a genuine new
 attempt) charges anew:
 
@@ -1348,6 +1501,14 @@ You never manage `execution_id` yourself — but this alignment is why
 5. **Size timeouts to real latency**: `wait_terminal(timeout=...)` and
    `GovernedLLMClient(timeout=...)` must exceed a single call's worst
    duration.
+6. **F3 reuse is OFF by default** — if you expect nodes to short-circuit
+   on rerun, wire `snapshot_query` + `reuse_terminal_words` into the
+   `TaskOrchestrator` (Ch.4.2); the RecoveryService wiring (Ch.12.2)
+   does not affect normal submissions.
+7. **Plan the production action queue** — the shipped
+   `MemoryActionQueue` is single-process. Implement the `ActionQueue`
+   protocol over your own carrier before deploying HITL to production
+   (Ch.10.1).
 
 ## Appendix B — Failure-honesty quick reference
 
@@ -1379,7 +1540,9 @@ Write your own smoke test the same way `tests/meta/test_example_mvp.py`
 does: run the pipeline end-to-end in a subprocess, require the OK marker
 plus `0 violations`.
 
-## Appendix D — Boundaries (deliberately not in this guide)
+## Appendix D — Boundaries
+
+### D.1 Out of scope by design
 
 | Topic | Where to look |
 |---|---|
@@ -1390,6 +1553,30 @@ plus `0 violations`.
 | The 12 normative terms (T1-T12) | `packages/protocol/docs/terms.md` |
 | Roadmap, commercial options, what we will NOT do | `docs/ROADMAP.md` |
 | Stability commitments (frozen vs ratifying surfaces) | `docs/stability.md` |
+
+### D.2 Public APIs not covered by this guide
+
+These are part of the open packages (public exports, not internals) but
+are outside this guide's main loop. None of them is required for
+anything in Chapters 1–12.
+
+| API | Package | What it does | Where to look |
+|---|---|---|---|
+| `Workflow` / `WorkflowStep` / `DAG` / `WorkflowExecutor` / `SagaPattern` | flow | Declarative DAG orchestration with Saga rollback — an alternative to the recursive-composition style of Ch.5 | `packages/flow` module docstrings |
+| `RetryPolicy` / `ExponentialBackoff` / `LinearBackoff` / `ConstantBackoff` / `DeadLetterQueue` | flow | Automatic (non-HITL) retries with backoff; dead-letter storage. Note: `DeadLetterQueue.retry()` is a documented skeleton — resubmit via the orchestrator instead | `packages/flow` module docstrings |
+| `PriorityScheduler` / `CronScheduler` / `DependencyScheduler` | flow | Priority / cron / dependency scheduling | `packages/flow` module docstrings |
+| `DelayedScheduler` | flow | **Skeleton only**: schedules a log on expiry, never triggers execution. Use an external scheduler (APScheduler / Celery Beat) for production | `packages/flow` module docstrings |
+| `WebhookCallback` / `WebSocketCallback` / `CompositeCallback` | flow | Push task outcomes to external systems | `packages/flow` module docstrings |
+| `ProgressTracker` / `ProgressReporter` / `ProgressEstimator` | flow | Progress update/notify/estimate helpers (beyond `report_progress`, Ch.4.6) | `packages/flow` module docstrings |
+| `AsyncTokenBucket` / `@limited` | core | Rate limiting (RPM/QPS) complementing the semaphore; declarative resource governance decorator | `packages/core/README.md` |
+| `LimiterHooks` | core | Observation hooks for acquire/release (metrics injection) | `packages/core/README.md` |
+| `RedisPoolManager` / `get_pool_manager` | core | Unified connection pool registry + water-level stats (see Ch.3.6) | `packages/core/README.md` |
+| `CancellationToken(min_interval=...)` | core | Poll the cancel flag with a local cache window, for very hot polling loops | `packages/core` module docstrings |
+| `StreamGovernorManager` | stream | Stream-side water-level queries (same five-field format as Ch.3.6) | `packages/stream/README.md` |
+
+If your use case lands here, the module docstrings and the per-package
+READMEs are the contract — you still do not need to read implementation
+internals.
 
 The contribution discipline when you extend the framework itself:
 public injection points only (sinks, protocols, `task_factory`, gateway
