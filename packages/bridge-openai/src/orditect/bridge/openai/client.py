@@ -209,22 +209,12 @@ class GovernedLLMClient:
                         thinking = (delta.get("reasoning_content")
                                     or delta.get("reasoning"))
                         if thinking:
-                            logger.warning(
-                                "PROBE reasoning: %d chars", len(thinking))
                             partial.append(thinking)
                             yield SourceChunk(thinking=thinking)
                         text = delta.get("content")
                         if text:
                             partial.append(text)
                             yield SourceChunk(text=text)
-                    if obj.get("usage"):
-                        result_holder["usage"] = obj["usage"]
-                        result_holder["model"] = obj.get("model")
-            # C5 (v0.1.5 / v0.1.6): latency is recorded by GovernedCallClient
-            # as elapsed_ms. The result holder carries only endpoint
-            # vocabulary — never internal fields (_latency_ms would leak into
-            # the caller-visible provider response and into cost_fn input).
-            yield SourceChunk(finish=True)
 
         governed_stream = self._call.call_streaming(
             handler=_gen,
