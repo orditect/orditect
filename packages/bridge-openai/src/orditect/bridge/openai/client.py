@@ -202,6 +202,17 @@ class GovernedLLMClient:
                     choices = obj.get("choices") or []
                     if choices:
                         delta = choices[0].get("delta") or {}
+                        # Native reasoning field (reasoning models):
+                        # translated into the framework's structured
+                        # thinking channel at this edge; the OpenAI
+                        # vocabulary never leaks downstream.
+                        thinking = (delta.get("reasoning_content")
+                                    or delta.get("reasoning"))
+                        if thinking:
+                            logger.warning(
+                                "PROBE reasoning: %d chars", len(thinking))
+                            partial.append(thinking)
+                            yield SourceChunk(thinking=thinking)
                         text = delta.get("content")
                         if text:
                             partial.append(text)
