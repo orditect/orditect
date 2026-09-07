@@ -80,15 +80,24 @@ def _make_client(handler, store, **kwargs):
     return GovernedLLMClient("http://test", **defaults)
 
 async def _drain_stream(stream):
-    """Consume a stream generator to completion AND let its finally blocks
-    (budget charge + audit write) settle on the next event-loop tick."""
+    """Consume a governed stream to completion; return all chunks.
+
+    Uses __aiter__() explicitly: stream() is an async generator function
+    and some type checkers mis-resolve the async-for protocol on the
+    AsyncIterator return annotation.
+    """
     chunks = []
-    async for chunk in stream:
-        chunks.append(chunk)
-    # Yield control so the generator's finally chain (which runs on the
-    # next tick after the async-for exits) completes.
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    ait = stream.__aiter__()
+    try:
+        while True:
+            try:
+                chunks.append(await ait.__anext__())
+            except StopAsyncIteration:
+                break
+    finally:
+        aclose = getattr(stream, "aclose", None)
+        if aclose is not None:
+            await aclose()
     return chunks
 
 class TestNonStreaming:
@@ -202,7 +211,11 @@ class TestStreaming:
         # A5: no usage in the stream -> cost_fn receives None; business prices it.
         assert seen == [None]
 
-    async def test_stream_break_marks_cancelled_and_pointerizes(self):
+    async def test_stream_break_marks_interrupted_and_pointerizes(self):
+        """Break without a cancel token = external interruption (v0.1.8
+        semantics): partial bytes are pointer-ized, the record carries
+        interrupted, and it is NOT marked cancelled."""
+
         async def handler(request: httpx.Request) -> httpx.Response:
             lines = [
                 json.dumps({"choices": [{"delta": {"content": f"c{i}"}}]})
@@ -230,8 +243,9 @@ class TestStreaming:
         events = store.audit._events
         assert len(events) == 1
         ev = next(iter(events.values()))
-        assert ev.payload["cancelled"] is True
-        assert ev.payload["pointer"]["backend"] == "memory"
+        assert "cancelled" not in ev.payload
+        assert ev.payload["interrupted"] is True
+        assert "pointer" in ev.payload
 
     async def test_cost_fn_holder_carries_no_internal_fields(self):
         """v0.1.6 pinning: the result holder handed to cost_fn contains only
@@ -262,7 +276,12 @@ class TestStreaming:
         await _drain_stream(client.stream(messages=[{"role": "user", "content": "hi"}]))
 
         assert seen and "_latency_ms" not in seen[-1]
-        assert set(seen[-1].keys()) <= {"usage", "model"}
+        # endpoint vocabulary plus the streaming evidence fields
+        # (termination/stream_chunks) — and never internal fields.
+        assert set(seen[-1].keys()) <= {
+            "usage", "model", "termination", "stream_chunks",
+            "finish_reason",
+        }
 
 class TestStreamAcloseCascade:
     """v0.1.7 pinning (issue #4): closing the bridge's stream must

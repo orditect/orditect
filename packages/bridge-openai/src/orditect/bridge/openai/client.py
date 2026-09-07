@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -35,6 +34,7 @@ import httpx
 
 from orditect.flow.governor.call import GovernedCallClient
 from orditect.flow.protocols.governor import ResourceGovernorProtocol
+from orditect.stream.exceptions import StreamEmptyError, StreamTruncatedError
 from orditect.stream.protocols.source import SourceChunk, SourceRequest
 
 logger = logging.getLogger(__name__)
@@ -165,6 +165,17 @@ class GovernedLLMClient:
         silently ignore stream_options (e.g. some Ollama versions) — the
         stream then works, and cost_fn receives None (A5: the business
         prices the usage-missing call).
+
+        Termination discipline: a stream ends exactly one of two ways.
+        "completed" — a [DONE] sentinel or a finish_reason was observed
+        (some compatible endpoints omit [DONE]); the protocol finish chunk
+        is then appended so downstream pipelines flush their tail buffers.
+        "truncated" — the connection closed without either marker, which
+        raises StreamTruncatedError (StreamEmptyError when zero chunks
+        arrived): a partial body must never pass as a completed stream.
+        Both the terminal classification and the finish_reason are written
+        into the audit payload, so a length-truncated completion
+        (finish_reason="length", still protocol-completed) stays visible.
         """
         if request is not None:
             payload = dict(request.payload)
@@ -181,7 +192,8 @@ class GovernedLLMClient:
         partial: list[str] = []
 
         async def _gen():
-            started = time.monotonic()
+            termination: str | None = None
+            chunks = 0
             async with self._http.stream(
                     "POST",
                     f"{self._base}/chat/completions",
@@ -194,13 +206,29 @@ class GovernedLLMClient:
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
+                        termination = "completed"
                         break
                     try:
                         obj = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    chunks += 1
+                    # Captured BEFORE the choices branch: the usage tail
+                    # chunk carries an empty choices list, and the previous
+                    # implementation skipped the whole object because of it.
+                    usage = obj.get("usage")
+                    if usage is not None:
+                        result_holder["usage"] = usage
+                    if obj.get("model"):
+                        result_holder["model"] = obj["model"]
                     choices = obj.get("choices") or []
                     if choices:
+                        finish = choices[0].get("finish_reason")
+                        if finish:
+                            result_holder["finish_reason"] = finish
+                            # Endpoints that never send [DONE]: a
+                            # finish_reason is also a normal terminal point.
+                            termination = "completed"
                         delta = choices[0].get("delta") or {}
                         # Native reasoning field (reasoning models):
                         # translated into the framework's structured
@@ -215,6 +243,27 @@ class GovernedLLMClient:
                         if text:
                             partial.append(text)
                             yield SourceChunk(text=text)
+            result_holder["termination"] = termination or "truncated"
+            result_holder["stream_chunks"] = chunks
+            if termination is None:
+                if chunks == 0:
+                    # The endpoint accepted the request but produced no
+                    # frames (typically a stream_options incompatibility):
+                    # fail loudly instead of emitting an empty report.
+                    raise StreamEmptyError(
+                        f"stream produced zero chunks (call_id={call_id}): "
+                        f"endpoint incompatibility",
+                        call_id=call_id,
+                    )
+                raise StreamTruncatedError(
+                    f"stream closed without [DONE]/finish_reason after "
+                    f"{chunks} chunks (call_id={call_id})",
+                    call_id=call_id,
+                    chunks=chunks,
+                )
+            # Normal terminal point: append the protocol finish chunk so
+            # the downstream pipeline flushes its buffered tail.
+            yield SourceChunk(finish=True)
 
         governed_stream = self._call.call_streaming(
             handler=_gen,
@@ -226,7 +275,10 @@ class GovernedLLMClient:
                 else None
             ),
             partial_fn=lambda: "".join(partial).encode("utf-8") or None,
-            payload_fn=lambda r: self._audit_payload(r),
+            # Audit reads the holder itself: on a truncated stream
+            # result_fn yields None, yet termination, finish_reason and
+            # the received-chunk count must still land on the record.
+            payload_fn=lambda r: self._audit_payload(result_holder or r),
         )
         try:
             async for chunk in governed_stream:
@@ -262,7 +314,13 @@ class GovernedLLMClient:
         return headers
 
     def _audit_payload(self, result: Any) -> dict:
-        """Translate endpoint vocabulary into the audit payload (edge)."""
+        """Translate endpoint vocabulary into the audit payload (edge).
+
+        Accepts both the endpoint response shape (chat: usage/model plus
+        finish_reason nested under choices) and the streaming result
+        holder (usage/model/finish_reason flattened, plus the terminal
+        classification and received-chunk count).
+        """
         if not isinstance(result, dict):
             return {}
         out: dict[str, Any] = {}
@@ -271,11 +329,17 @@ class GovernedLLMClient:
         usage = result.get("usage")
         if isinstance(usage, dict):
             out["usage"] = usage
-        choices = result.get("choices")
-        if isinstance(choices, list) and choices:
-            finish = choices[0].get("finish_reason")
-            if finish:
-                out["finish_reason"] = finish
+        finish = result.get("finish_reason")
+        if not finish:
+            choices = result.get("choices")
+            if isinstance(choices, list) and choices:
+                finish = choices[0].get("finish_reason")
+        if finish:
+            out["finish_reason"] = finish
+        if result.get("termination"):
+            out["termination"] = result["termination"]
+        if result.get("stream_chunks") is not None:
+            out["stream_chunks"] = result["stream_chunks"]
         return out
 
     def _content_bytes(self, messages: list[dict] | None):
