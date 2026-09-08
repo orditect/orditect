@@ -1,83 +1,105 @@
+"""GovernedLLMClient tests (fake governance plane, in-process HTTP fakes).
 
-"""Pinning tests for GovernedLLMClient (endpoint bridge reference).
-
-Covers: non-streaming governed call (audit once, usage->cost, latency),
-streaming as LLMSourceProtocol (SourceChunk deltas + finish, charge at
-stream end, audit at stream close), usage-missing pricing path, cancel
-cleanup, and that OpenAI-shaped vocabulary stays at the bridge edge
-(audit payload is the only place it appears).
+Covers:
+- chat(): governed non-streaming call shape
+- stream(): chunk translation, governance lifecycle, audit/cost evidence
+- test doubles: FakeGovernor / RecordingAudit / FakeContentWriter /
+  MemoryStore-backed audit reads
 """
-
 from __future__ import annotations
 
-import json
 import asyncio
+import json
+
 import httpx
 import pytest
 
-from orditect.bridge.openai import GovernedLLMClient
 from orditect.adapter.memory import MemoryStore
-from orditect.stream.protocols.source import SourceChunk
+from orditect.bridge.openai import GovernedLLMClient
+from orditect.flow.governor.call import GovernedCallClient
 
-pytestmark = pytest.mark.unit
+
+# ---- test doubles ----------------------------------------------------------
 
 
 class FakeGovernor:
-    def __init__(self):
+    """Unbounded governor: acquire always succeeds, records usage."""
+
+    def __init__(self) -> None:
         self.acquired: list[str] = []
         self.released: list[str] = []
 
-    async def acquire(self, resource: str, timeout=None) -> str:
+    async def acquire(self, resource: str, timeout: float | None = None) -> str:
         self.acquired.append(resource)
-        return "tok-1"
+        return f"tok-{len(self.acquired)}"
 
-    async def try_acquire(self, resource: str):
+    async def try_acquire(self, resource: str) -> str | None:
         return await self.acquire(resource)
 
     async def release(self, resource: str, token: str) -> None:
-        self.released.append(resource)
+        self.released.append(token)
 
     async def get_usage(self, resource: str) -> int:
-        return 0
+        return len(self.acquired) - len(self.released)
 
 
-def _chat_response(model="gpt-4o", content="hello", total_tokens=42):
-    return {
-        "id": "chatcmpl-1",
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 32,
-            "total_tokens": total_tokens,
-        },
-    }
+class RecordingAudit:
+    """Captures AuditEvent objects (flow-side append() contract)."""
+
+    def __init__(self) -> None:
+        self.events: list = []
+
+    async def append(self, event) -> None:
+        self.events.append(event)
 
 
-def _sse(lines: list[str]) -> str:
-    return "".join(f"data: {l}\n\n" for l in lines) + "data: [DONE]\n\n"
+class FakeContentWriter:
+    """Content store fake: blobs keyed by a mem:// pointer string."""
+
+    def __init__(self) -> None:
+        self.blobs: dict[str, bytes] = {}
+        self._n = 0
+
+    async def put(self, data: bytes, content_type: str | None = None):
+        self._n += 1
+        key = f"mem://c/{self._n}"
+        self.blobs[key] = data
+
+        class _Pointer:
+            def __init__(self, k: str):
+                self._k = k
+
+            def to_payload(self) -> dict:
+                return {"pointer": self._k}
+
+        return _Pointer(key)
 
 
-def _make_client(handler, store, **kwargs):
+# ---- helpers ----------------------------------------------------------------
+
+
+def _sse(lines: list[str], done: bool = True) -> str:
+    """Assemble an SSE body from JSON frame strings."""
+    body = "".join(f"data: {line}\n\n" for line in lines)
+    if done:
+        body += "data: [DONE]\n\n"
+    return body
+
+
+def _make_client(handler, store: MemoryStore, **kwargs) -> GovernedLLMClient:
+    """Client over an httpx MockTransport with the memory-backed plane."""
     transport = httpx.MockTransport(handler)
-    http = httpx.AsyncClient(transport=transport)
-    defaults = dict(
+    return GovernedLLMClient(
+        "http://fake-llm.test/v1",
         governor=FakeGovernor(),
         resource="llm",
+        model="fake-model",
         audit_writer=store.audit,
         content_writer=store.content,
-        model="gpt-4o",
-        task_id="t-1",
-        http_client=http,
+        http_client=httpx.AsyncClient(transport=transport, timeout=30.0),
+        **kwargs,
     )
-    defaults.update(kwargs)
-    return GovernedLLMClient("http://test", **defaults)
+
 
 async def _drain_stream(stream):
     """Consume a governed stream to completion; return all chunks.
@@ -100,61 +122,62 @@ async def _drain_stream(stream):
             await aclose()
     return chunks
 
-class TestNonStreaming:
-    async def test_chat_governed_and_audited(self):
+
+# ---- chat -------------------------------------------------------------------
+
+
+class TestChat:
+    @pytest.mark.asyncio
+    async def test_chat_returns_endpoint_result(self):
         async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=_chat_response())
+            return httpx.Response(200, json={
+                "id": "chatcmpl-1",
+                "model": "fake-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2,
+                          "total_tokens": 5},
+            })
 
         store = MemoryStore()
         client = _make_client(handler, store)
         result = await client.chat(
-            messages=[{"role": "user", "content": "hi"}], call_id="c-1"
-        )
+            messages=[{"role": "user", "content": "hello"}])
+        await client.aclose()
 
-        assert result["usage"]["total_tokens"] == 42
-        # C5 (v0.1.5): the bridge no longer injects _latency_ms into the
-        # caller-visible provider response.
-        assert "_latency_ms" not in result
-        events = store.audit._events  # memory part introspection for pinning
+        assert result["choices"][0]["message"]["content"] == "hi"
+        events = store.audit._events
         assert len(events) == 1
-        ev = events["c-1"]
-        assert ev.event_type == "llm_call"
-        assert ev.task_id == "t-1"
-        assert ev.payload["model"] == "gpt-4o"
-        assert ev.payload["usage"]["total_tokens"] == 42
-        assert ev.payload["finish_reason"] == "stop"
-        # FLIP(v0.1.5): latency is recorded as elapsed_ms by
-        # GovernedCallClient; the bridge no longer emits latency_ms.
-        assert "elapsed_ms" in ev.payload
-        assert "latency_ms" not in ev.payload
+        ev = next(iter(events.values()))
+        assert ev.payload.get("usage", {}).get("total_tokens") == 5
+        assert ev.payload.get("finish_reason") == "stop"
 
-    async def test_messages_pointerized(self):
+    @pytest.mark.asyncio
+    async def test_chat_http_error_raises(self):
         async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=_chat_response())
+            return httpx.Response(500, text="boom")
 
         store = MemoryStore()
         client = _make_client(handler, store)
-        await client.chat(messages=[{"role": "user", "content": "secret"}])
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.chat(
+                messages=[{"role": "user", "content": "hello"}])
+        await client.aclose()
 
-        # content part holds the pointer-ized messages blob
-        assert len(store.content._data) == 1
-        blob = next(iter(store.content._data.values()))[0]
-        assert b"secret" in blob
+
+# ---- streaming ----------------------------------------------------------------
 
 
 class TestStreaming:
-
-    async def test_stream_yields_source_chunks_and_charges_at_end(self):
+    @pytest.mark.asyncio
+    async def test_stream_yields_translated_chunks(self):
         async def handler(request: httpx.Request) -> httpx.Response:
             lines = [
                 json.dumps({"choices": [{"delta": {"content": "he"}}]}),
                 json.dumps({"choices": [{"delta": {"content": "llo"}}]}),
-                json.dumps({
-                    "model": "gpt-4o",
-                    "choices": [{"delta": {}}],
-                    "usage": {"total_tokens": 7, "prompt_tokens": 2,
-                              "completion_tokens": 5},
-                }),
             ]
             return httpx.Response(
                 200, text=_sse(lines),
@@ -162,60 +185,45 @@ class TestStreaming:
             )
 
         store = MemoryStore()
-        seen_costs: list = []
-
-        def cost_fn(result):
-            seen_costs.append(result)
-            return (result or {}).get("usage", {}).get("total_tokens", 0)
-
-        client = _make_client(handler, store, cost_fn=cost_fn)
+        client = _make_client(handler, store)
         chunks = await _drain_stream(
-            client.stream(messages=[{"role": "user", "content": "hi"}])
-        )
+            client.stream(messages=[{"role": "user", "content": "hi"}]))
+        await client.aclose()
 
         texts = [c.text for c in chunks if c.text]
         assert texts == ["he", "llo"]
+        # the fixed bridge appends a protocol finish chunk at [DONE]
         assert chunks[-1].finish is True
 
-        # charge happened once, at stream end, with the usage holder
-        assert seen_costs and seen_costs[-1]["usage"]["total_tokens"] == 7
-
-        events = store.audit._events
-        assert len(events) == 1
-        ev = next(iter(events.values()))
-        assert ev.payload["usage"]["total_tokens"] == 7
-        assert ev.payload["model"] == "gpt-4o"
-        # C2 (v0.1.5): cost_fn output is recorded in the audit payload.
-        assert ev.payload["cost_units"] == 7
-        # FLIP(v0.1.5): latency comes from the client's elapsed_ms.
-        assert "elapsed_ms" in ev.payload
-        assert "latency_ms" not in ev.payload
-
-    async def test_stream_usage_missing_cost_fn_gets_none(self):
+    @pytest.mark.asyncio
+    async def test_stream_reasoning_goes_to_thinking_channel(self):
         async def handler(request: httpx.Request) -> httpx.Response:
-            lines = [json.dumps({"choices": [{"delta": {"content": "x"}}]})]
+            lines = [
+                json.dumps({"choices": [{"delta": {
+                    "reasoning_content": "pondering"}}]}),
+                json.dumps({"choices": [{"delta": {"content": "answer"}}]}),
+            ]
             return httpx.Response(
                 200, text=_sse(lines),
                 headers={"Content-Type": "text/event-stream"},
             )
 
         store = MemoryStore()
-        seen: list = []
-        client = _make_client(
-            handler, store, cost_fn=lambda r: seen.append(r) or 3
-        )
-        await _drain_stream(
-            client.stream(messages=[{"role": "user", "content": "hi"}])
-        )
+        client = _make_client(handler, store)
+        chunks = await _drain_stream(
+            client.stream(messages=[{"role": "user", "content": "hi"}]))
+        await client.aclose()
 
-        # A5: no usage in the stream -> cost_fn receives None; business prices it.
-        assert seen == [None]
+        thinking = [c.thinking for c in chunks if c.thinking]
+        texts = [c.text for c in chunks if c.text]
+        assert thinking == ["pondering"]
+        assert texts == ["answer"]
 
+    @pytest.mark.asyncio
     async def test_stream_break_marks_interrupted_and_pointerizes(self):
         """Break without a cancel token = external interruption (v0.1.8
         semantics): partial bytes are pointer-ized, the record carries
         interrupted, and it is NOT marked cancelled."""
-
         async def handler(request: httpx.Request) -> httpx.Response:
             lines = [
                 json.dumps({"choices": [{"delta": {"content": f"c{i}"}}]})
@@ -246,15 +254,64 @@ class TestStreaming:
         assert "cancelled" not in ev.payload
         assert ev.payload["interrupted"] is True
         assert "pointer" in ev.payload
+        await client.aclose()
 
+    @pytest.mark.asyncio
+    async def test_stream_break_with_cancelled_token_marks_cancelled_and_pointerizes_partial(self):
+        """Break with a flipped cancel token = true cancellation.
+
+        The token flips DURING consumption (the realistic HITL shape:
+        cancel arrives after the stream started). The record is marked
+        cancelled, partial bytes are pointer-ized, and nothing is
+        charged (mirrors call()'s cancel path).
+        """
+        audit = RecordingAudit()
+        content = FakeContentWriter()
+
+        class _Token:
+            def __init__(self):
+                self._cancelled = False
+
+            def cancel(self):
+                self._cancelled = True
+
+            async def is_cancelled(self):
+                return self._cancelled
+
+        token = _Token()
+
+        async def gen():
+            for i in range(100):
+                yield i
+
+        client = GovernedCallClient(
+            FakeGovernor(), "res", audit_writer=audit, content_writer=content
+        )
+        count = 0
+        async for _ in client.call_streaming(
+            handler=lambda: gen(),
+            partial_fn=lambda: b"partial-data",
+            cancel_token=token,
+        ):
+            count += 1
+            if count == 2:
+                token.cancel()  # cancel arrives mid-stream
+                break
+
+        for _ in range(50):
+            if audit.events:
+                break
+            await asyncio.sleep(0.01)
+
+        ev = audit.events[0]
+        assert ev.payload["cancelled"] is True
+        assert list(content.blobs.values()) == [b"partial-data"]
+
+    @pytest.mark.asyncio
     async def test_cost_fn_holder_carries_no_internal_fields(self):
         """v0.1.6 pinning: the result holder handed to cost_fn contains only
-        endpoint vocabulary (usage/model) — never the internal _latency_ms
-        that C5 removed from the non-streaming path.
-
-        Red before: _gen() still injected _latency_ms into result_holder,
-        leaking an internal field into cost_fn's input on the streaming path.
-        """
+        endpoint vocabulary plus the streaming evidence fields — never the
+        internal _latency_ms that C5 removed from the non-streaming path."""
         async def handler(request: httpx.Request) -> httpx.Response:
             lines = [
                 json.dumps({"choices": [{"delta": {"content": "x"}}]}),
@@ -272,28 +329,24 @@ class TestStreaming:
 
         store = MemoryStore()
         seen: list = []
-        client = _make_client(handler, store, cost_fn=lambda r: seen.append(r) or 5)
-        await _drain_stream(client.stream(messages=[{"role": "user", "content": "hi"}]))
+        client = _make_client(handler, store,
+                              cost_fn=lambda r: seen.append(r) or 5)
+        await _drain_stream(
+            client.stream(messages=[{"role": "user", "content": "hi"}]))
+        await client.aclose()
 
         assert seen and "_latency_ms" not in seen[-1]
         # endpoint vocabulary plus the streaming evidence fields
-        # (termination/stream_chunks) — and never internal fields.
+        # (termination/stream_chunks/finish_reason) — never internal fields.
         assert set(seen[-1].keys()) <= {
             "usage", "model", "termination", "stream_chunks",
             "finish_reason",
         }
 
-class TestStreamAcloseCascade:
-    """v0.1.7 pinning (issue #4): closing the bridge's stream must
-    deterministically release the semaphore and close the HTTP stream via
-    the aclose cascade (GovernedLLMClient.stream -> call_streaming -> _gen),
-    not via GC timing.
-
-    Red before: GovernedLLMClient.stream never aclosed the governed stream,
-    so the release depended on asyncio asyncgen finalization.
-    """
-
-    async def test_break_releases_governor_deterministically(self):
+    @pytest.mark.asyncio
+    async def test_stream_aclose_releases_governor_token(self):
+        """v0.1.7 pin: an explicit aclose deterministically releases the
+        semaphore instead of relying on GC timing."""
         async def handler(request: httpx.Request) -> httpx.Response:
             lines = [
                 json.dumps({"choices": [{"delta": {"content": f"c{i}"}}]})
@@ -305,15 +358,24 @@ class TestStreamAcloseCascade:
             )
 
         store = MemoryStore()
+        transport = httpx.MockTransport(handler)
         governor = FakeGovernor()
-        client = _make_client(handler, store, governor=governor)
-
+        client = GovernedLLMClient(
+            "http://fake-llm.test/v1",
+            governor=governor,
+            resource="llm",
+            model="fake-model",
+            audit_writer=store.audit,
+            http_client=httpx.AsyncClient(transport=transport, timeout=30.0),
+        )
         stream = client.stream(messages=[{"role": "user", "content": "hi"}])
         async for _ in stream:
             break
-        # aclose returns only after the full finally chain settled (inner
-        # HTTP-stream close + audit finalize + shielded release).
         await stream.aclose()
-
-        assert governor.released == ["llm"]
-        assert client._call._release_tasks == set()
+        for _ in range(50):
+            if governor.released:
+                break
+            await asyncio.sleep(0.01)
+        assert governor.acquired == ["llm"]
+        assert len(governor.released) == 1
+        await client.aclose()

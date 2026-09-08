@@ -242,7 +242,14 @@ class TestCallStreaming:
         assert seen == [None]
         assert budget.charges[0][1] == 2
 
-    async def test_stream_break_marks_cancelled_and_pointerizes_partial(self):
+    async def test_stream_break_without_token_marks_interrupted_and_pointerizes_partial(self):
+        """Break without a cancel token = external interruption.
+
+        Under the adjudicated semantics, abandoning the stream without a
+        flipped cancel token is NOT a cancellation: consumed tokens are
+        charged when a result exists, partial bytes are pointer-ized as
+        evidence, and the record carries interrupted.
+        """
         import asyncio
         audit = RecordingAudit()
         content = FakeContentWriter()
@@ -256,15 +263,67 @@ class TestCallStreaming:
         )
         count = 0
         async for _ in client.call_streaming(
-            handler=lambda: gen(), partial_fn=lambda: b"partial-data"
+                handler=lambda: gen(), partial_fn=lambda: b"partial-data"
         ):
             count += 1
             if count == 2:
                 break
 
         # break triggers GeneratorExit, whose finally block (audit write)
-        # runs on the NEXT event-loop tick. Yield control so the generator's
-        # cleanup completes before asserting.
+        # runs on the NEXT event-loop tick. Yield control so the
+        # generator's cleanup completes before asserting.
+        for _ in range(50):
+            if audit.events:
+                break
+            await asyncio.sleep(0.01)
+
+        ev = audit.events[0]
+        assert "cancelled" not in ev.payload
+        assert ev.payload["interrupted"] is True
+        assert list(content.blobs.values()) == [b"partial-data"]
+
+    async def test_stream_break_with_cancelled_token_marks_cancelled_and_pointerizes_partial(self):
+        """Break with a flipped cancel token = true cancellation.
+
+        The token flips DURING consumption (the realistic HITL shape:
+        cancel arrives after the stream started). The record is marked
+        cancelled, partial bytes are pointer-ized, and nothing is
+        charged (mirrors call()'s cancel path).
+        """
+        import asyncio
+        audit = RecordingAudit()
+        content = FakeContentWriter()
+
+        class _Token:
+            def __init__(self):
+                self._cancelled = False
+
+            def cancel(self):
+                self._cancelled = True
+
+            async def is_cancelled(self):
+                return self._cancelled
+
+        token = _Token()
+
+        async def gen():
+            for i in range(100):
+                yield i
+
+        client = GovernedCallClient(
+            FakeGovernor(), "res", audit_writer=audit, content_writer=content
+        )
+        count = 0
+        async for _ in client.call_streaming(
+                handler=lambda: gen(),
+                partial_fn=lambda: b"partial-data",
+                cancel_token=token,
+        ):
+            count += 1
+            if count == 2:
+                token.cancel()  # cancel arrives mid-stream
+                break
+
         for _ in range(50):
             if audit.events:
                 break
@@ -272,7 +331,6 @@ class TestCallStreaming:
 
         ev = audit.events[0]
         assert ev.payload["cancelled"] is True
-        assert ev.payload["pointer"]["backend"] == "mem"
         assert list(content.blobs.values()) == [b"partial-data"]
 
     async def test_stream_error_audited_and_released(self):

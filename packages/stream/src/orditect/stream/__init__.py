@@ -4,7 +4,7 @@ Core features:
 - Standard SSE protocol: stream.delta / enrich.* / stage.end / stream.manifest
 - Multi-stream multiplexing: one request can merge up to max_id substreams for output
 - Rich-media placeholders: in-stream image markers → placeholders → backfill (settle window / manifest delegation)
-- Thinking modes: three levels — inline / separate / suppress
+- Thinking modes: three levels — inline / separate / suppress (reasoning-model chain-of-thought handling)
 - Disconnect policy: cancel / grace / continue
 - Loose coupling: can be used standalone or integrated with orditect-flow/taskbase
 - Resource status query: StreamGovernorManager (semaphore visualization enhancement)
@@ -27,6 +27,8 @@ from orditect.stream.exceptions import (
     BackpressureError,
     StoreError,
     StructuredStreamError,
+    StreamTruncatedError,
+    StreamEmptyError,
 )
 from orditect.stream.config import (
     StreamConfig,
@@ -82,6 +84,8 @@ __all__ = [
     "BackpressureError",
     "StoreError",
     "StructuredStreamError",
+    "StreamTruncatedError",
+    "StreamEmptyError",
     # configuration
     "StreamConfig",
     "ThinkingMode",
@@ -113,10 +117,9 @@ __all__ = [
     "LLMSourceProtocol", "SourceChunk", "SourceRequest",
     "EnricherProtocol", "EnrichRequest", "EnrichResult",
     "ResultStoreProtocol", "JournalProtocol", "StreamHooks",
-    "CancellationToken",  # 新增
-    "ResourceGovernorProtocol",  # 新增
-    "StreamCancelledError",  # 新增（已在 exceptions.py 中）
-    "DEFAULT_STREAM_LLM_RESOURCE",  # 新增
-    "make_stream_cancelled",  # 新增
-    "StreamGovernorManager",  # 新增（sem 可视化增强）
+    "CancellationToken",
+    "ResourceGovernorProtocol",
+    "DEFAULT_STREAM_LLM_RESOURCE",
+    "make_stream_cancelled",
+    "StreamGovernorManager",
 ]

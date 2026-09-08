@@ -99,7 +99,13 @@ class StageRunner:
         )
 
     async def _source_chunks(self, cancel_token: CancellationToken) -> AsyncIterator[SourceChunk]:
-        """Produce a stream of SourceChunks by source_type."""
+        """Produce a stream of SourceChunks by source_type.
+
+        LLM branch seam normalization: the protocol allows a source to end
+        WITHOUT a finish chunk (natural end), but the pipeline's terminal
+        flush keys on finish=True — a source that ends naturally gets one
+        appended so no downstream middleware can lose its buffered tail.
+        """
         if self._cfg.source_type is SourceType.PASSTHROUGH:
             yield SourceChunk(text=self._cfg.content or "")
             yield SourceChunk(finish=True)
@@ -111,8 +117,12 @@ class StageRunner:
             return
         # LLM
         assert self._cfg.source is not None
+        finished = False
         async for chunk in self._cfg.source.stream(self._cfg.request, cancel_token=cancel_token):
+            finished = finished or chunk.finish
             yield chunk
+        if not finished:
+            yield SourceChunk(finish=True)
 
     async def run(
         self,
@@ -154,21 +164,46 @@ class StageRunner:
             # 1b: fallback start for consuming after cancel (None=not cancelled)
             drain_deadline: float | None = None
             loop = asyncio.get_running_loop()
+            ait = pipeline.__aiter__()
 
-            async for marked in pipeline:
-                # check cancel: stop output but keep consuming (keep LLM connection, semaphore not released)
-                if self._cancel_token.is_cancelled():
-                    # 1b: set fallback limit when first entering consumption mode
-                    if drain_deadline is None:
-                        drain_deadline = loop.time() + self._scfg.post_cancel_drain_timeout
-                    # 1b: exceeded fallback limit, abandon consumption and force cleanup (prevent LLM hang occupying semaphore permanently)
-                    if loop.time() > drain_deadline:
+            while True:
+                # In drain mode the next-chunk wait is bounded by the
+                # remaining drain budget: a fully hung LLM (no data at all)
+                # would otherwise hold the semaphore until the HTTP timeout
+                # fires, far beyond post_cancel_drain_timeout.
+                if drain_deadline is not None:
+                    remaining = drain_deadline - loop.time()
+                    if remaining <= 0:
                         logger.warning(
                             f"Post-cancel drain timeout "
                             f"({self._scfg.post_cancel_drain_timeout}s), "
                             f"abandoning LLM stream: stage={self._cfg.name}"
                         )
                         break
+                    try:
+                        marked = await asyncio.wait_for(
+                            ait.__anext__(), timeout=remaining
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            f"Post-cancel drain timeout "
+                            f"({self._scfg.post_cancel_drain_timeout}s), "
+                            f"abandoning LLM stream: stage={self._cfg.name}"
+                        )
+                        break
+                    except StopAsyncIteration:
+                        break
+                else:
+                    try:
+                        marked = await ait.__anext__()
+                    except StopAsyncIteration:
+                        break
+
+                # check cancel: stop output but keep consuming (keep LLM connection, semaphore not released)
+                if self._cancel_token.is_cancelled():
+                    # 1b: set fallback limit when first entering consumption mode
+                    if drain_deadline is None:
+                        drain_deadline = loop.time() + self._scfg.post_cancel_drain_timeout
                     # not yield, but continue consuming (keep LLM connection)
                     continue
 

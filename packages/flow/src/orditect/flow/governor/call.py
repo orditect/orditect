@@ -248,13 +248,18 @@ class GovernedCallClient:
         - The semaphore is held for the stream's whole lifetime and released
           (shielded) when the stream closes.
         - Exactly one audit event is written when the stream closes (ok /
-          error / cancelled); deltas are output-plane traffic, never ledger
-          rows.
+          error / cancelled / interrupted); deltas are output-plane traffic,
+          never ledger rows.
         - cost_fn is evaluated at stream end over result_fn() (possibly None
           when the source reports no usage — the business prices it);
-          charging happens only on normal completion, mirroring call().
-        - On cancellation (caller break / aclose / task cancel), partial_fn()
-          bytes are pointer-ized and the audit record is marked cancelled.
+          charging happens on normal completion AND on error/interruption
+          paths where a partial result exists (real tokens were consumed).
+        - GeneratorExit classification: only a flipped cancel token marks a
+          true cancellation (partial pointer, no charge, mirrors call()'s
+          cancel path). A token-less consumer break is an EXTERNAL
+          INTERRUPTION (SSE disconnect, orphaned consumer): the partial
+          result is captured and charged, and the record is marked
+          interrupted instead of cancelled.
         - The handler's generator is deterministically closed (aclose
           cascade, v0.1.7): async-for never acloses inner iterators, so
           inner resources (e.g. an HTTP stream) would otherwise be left to
@@ -284,7 +289,7 @@ class GovernedCallClient:
         cancelled = False
         error: BaseException | None = None
         result: Any = None
-        cost: int | None = None  # only computed on normal completion
+        cost: int | None = None  # only computed when a result exists
         gen = None
         try:
             gen = fn(*args, **kwargs)
@@ -300,14 +305,60 @@ class GovernedCallClient:
                 await self._budget.charge(cost, call_id=cid)
             ok = True
         except GeneratorExit:
-            # Consumer broke out early / aclose(): cancelled stream.
-            cancelled = True
+            # Consumer broke out early / aclose(). This is NOT necessarily a
+            # user cancel: SSE disconnects and orphaned consumers land here
+            # too. Only a flipped token marks a true cancellation; anything
+            # else is an externally interrupted stream that still consumed
+            # real tokens — capture the partial result and charge it.
+            cancelled = (
+                cancel_token is not None
+                and await cancel_token.is_cancelled()
+            )
+            if not cancelled and result_fn is not None:
+                try:
+                    result = result_fn()
+                except Exception as e:
+                    logger.warning(
+                        f"result_fn failed on interrupted stream: {e}"
+                    )
+                if result is not None:
+                    try:
+                        cost = self._cost_fn(result)
+                        if self._budget is not None:
+                            await self._budget.charge(cost, call_id=cid)
+                    except Exception as e:
+                        logger.warning(
+                            f"interrupted-stream charge failed "
+                            f"(audit continues): {e}"
+                        )
             raise
         except asyncio.CancelledError:
             cancelled = True
             raise
         except BaseException as e:
             error = e
+            # A truncated/failed stream still consumed real tokens up to
+            # the failure point. Charge the partial result (when the
+            # source reported one) instead of silently skipping the
+            # ledger — the audit payload marks it via charged_on_error
+            # so the books stay reconcilable.
+            if result_fn is not None:
+                try:
+                    result = result_fn()
+                except Exception as rf_err:
+                    logger.warning(
+                        f"result_fn failed on error path: {rf_err}"
+                    )
+                if result is not None:
+                    try:
+                        cost = self._cost_fn(result)
+                        if self._budget is not None:
+                            await self._budget.charge(cost, call_id=cid)
+                    except Exception as charge_err:
+                        logger.warning(
+                            f"error-path charge failed "
+                            f"(audit continues): {charge_err}"
+                        )
             raise
         finally:
             # v0.1.7: deterministically close the handler's generator so its
@@ -323,7 +374,11 @@ class GovernedCallClient:
                             f"handler stream aclose failed (ignored): {e}"
                         )
             pointer_data: bytes | None = None
-            if cancelled and partial_fn is not None:
+            if not ok and partial_fn is not None:
+                # partial evidence is captured on EVERY non-ok ending
+                # (true cancel, external interruption, handler error):
+                # the bytes produced up to that point are the only
+                # record of what the stream had already emitted.
                 try:
                     pointer_data = partial_fn()
                 except Exception as e:
@@ -336,10 +391,12 @@ class GovernedCallClient:
                 result=result,
                 error=error,
                 cancelled=cancelled,
+                interrupted=not ok and not cancelled and error is None,
                 elapsed=time.monotonic() - started,
                 payload_fn=payload_fn,
                 pointer_data=pointer_data,
                 cost_units=cost,
+                charged_on_error=error is not None and cost is not None,
             )
             # v0.1.6: shield + strong reference for the release task, so an
             # orphaned shield task is never GC-collected mid-release (the
@@ -375,10 +432,16 @@ class GovernedCallClient:
         content_fn: ContentFn | None = None,
         pointer_data: bytes | None = None,
         cost_units: int | None = None,
+        charged_on_error: bool = False,
+        interrupted: bool = False,
     ) -> None:
         """Pointer-ize content, then write one audit event."""
         payload: dict[str, Any] = {}
-        if ok and payload_fn is not None:
+        # payload_fn runs on every audited outcome, not only ok: bridges
+        # use it to surface termination evidence (finish_reason,
+        # termination class, chunk counts) whose value is highest exactly
+        # when the call failed or was cancelled.
+        if payload_fn is not None:
             try:
                 payload.update(payload_fn(result) or {})
             except Exception as e:
@@ -387,6 +450,15 @@ class GovernedCallClient:
             payload["error"] = str(error)
         if cancelled:
             payload["cancelled"] = True
+        if interrupted:
+            # the consumer vanished without a cancel request (SSE
+            # disconnect, orphaned consumer): distinct from a true
+            # cancellation; the consumed tokens were still charged.
+            payload["interrupted"] = True
+        if charged_on_error:
+            # the ledger entry for this record was written on the error
+            # path (real token consumption before the failure)
+            payload["charged_on_error"] = True
         payload["elapsed_ms"] = int(elapsed * 1000)
         if cost_units is not None:
             # C2 (v0.1.5): cost_fn output is recorded whenever evaluated,

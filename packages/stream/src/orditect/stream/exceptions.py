@@ -35,6 +35,7 @@ class BackpressureError(TaskstreamError):
 class StoreError(TaskstreamError):
     """Result store read/write failure."""
 
+
 class StructuredStreamError(TaskstreamError):
     """Structured error that can be serialized as a stream.error event.
 
@@ -56,3 +57,33 @@ class StructuredStreamError(TaskstreamError):
         self.retryable = retryable
         self.stage = stage
         self.ext = ext or {}
+
+
+class StreamTruncatedError(SourceError):
+    """Upstream closed before [DONE] / finish_reason: partial output.
+
+    Raised by endpoint bridges when the SSE connection ends without any
+    terminal marker. Carries the call identity and the number of chunks
+    received so far so the failure stays auditable.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        call_id: str | None = None,
+        chunks: int = 0,
+    ):
+        super().__init__(message)
+        self.call_id = call_id
+        self.chunks = chunks
+
+
+class StreamEmptyError(StreamTruncatedError):
+    """200 OK but zero chunks: endpoint incompatibility.
+
+    Raised when the endpoint accepted the streaming request but produced
+    no SSE frames at all (typically an endpoint that silently chokes on
+    stream_options). Distinct from a legitimate empty completion, which
+    still terminates with [DONE].
+    """

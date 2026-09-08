@@ -9,6 +9,9 @@ Behavior:
   - Buffer tail is incomplete marker prefix: hold back (half-marker protection)
   - Threshold reached with newline/heading, or timeout: flush "safe part" (keep incomplete prefix)
 - finish: flush all remaining text; trailing markers still hit (framework faithfully outputs LLM content, never discards)
+- Natural end (upstream iterable exhausts without a finish chunk): the
+  LLMSourceProtocol explicitly allows it; the residual buffer is flushed
+  and an implicit finish marker is emitted, so the tail is never dropped.
 
 Context extraction strategy (config.enrich_context_strategy):
 - paragraph: last paragraph before hit (split by \n)
@@ -90,12 +93,31 @@ class MarkerDetector:
         paragraphs = [p for p in re.split(r"\n+", text) if p.strip()]
         return paragraphs[-1].strip() if paragraphs else ""
 
+    async def _drain_buffer(self, buffer: str) -> AsyncIterator[MarkedChunk]:
+        """Flush the residual buffer at stream end.
+
+        Complete markers still in the buffer hit normally (the framework
+        stays faithful to the LLM output and never discards); the text
+        preceding each marker is flushed BEFORE the hit is yielded so the
+        downstream char_offset backfill stays exact.
+        """
+        while True:
+            pos = buffer.find(self._marker)
+            if pos == -1:
+                break
+            preceding = buffer[:pos]
+            if preceding:
+                yield MarkedChunk(text=preceding)
+            yield MarkedChunk(
+                hits=[MarkerHit(context_text=self._extract_context(preceding))]
+            )
+            buffer = buffer[pos + len(self._marker):]
+        if buffer:
+            yield MarkedChunk(text=buffer)
+
     async def process(self, chunks: AsyncIterable[SourceChunk]) -> AsyncIterator[MarkedChunk]:
         buffer = ""
         last_flush = time.monotonic()
-
-        async def flush(text: str, hits: list[MarkerHit] | None = None) -> MarkedChunk:
-            return MarkedChunk(text=text or None, hits=hits or [])
 
         async for chunk in chunks:
             # non-text blocks pass through ignored
@@ -103,22 +125,10 @@ class MarkerDetector:
                 continue
 
             if chunk.finish:
-                # end: process remaining complete markers in buffer (tail marker hit normally, framework faithful to LLM output)
-                # T4: hit yields immediately after flushing its preceding text — no batching.
-                # Batching would cause StageRunner to backfill char_offset when content already contains
-                # text after marker, offsets become too large (all same value when multiple tail markers).
-                while True:
-                    pos = buffer.find(self._marker)
-                    if pos == -1:
-                        break
-                    preceding = buffer[:pos]
-                    if preceding:
-                        yield await flush(preceding)
-                    # immediately yield hit (downstream content is exactly the preceding end)
-                    yield MarkedChunk(hits=[MarkerHit(context_text=self._extract_context(preceding))])
-                    buffer = buffer[pos + len(self._marker):]
-                if buffer:
-                    yield await flush(buffer)
+                # explicit end: flush the residual buffer, tail markers
+                # still hit, then terminate the marked stream
+                async for out in self._drain_buffer(buffer):
+                    yield out
                 yield MarkedChunk(finish=True)
                 return
 
@@ -132,17 +142,25 @@ class MarkerDetector:
                     break
                 preceding = buffer[:pos]
                 if preceding:
-                    yield await flush(preceding)
+                    yield MarkedChunk(text=preceding)
                 hit = MarkerHit(context_text=self._extract_context(preceding))
                 buffer = buffer[pos + len(self._marker):]
                 last_flush = now
                 yield MarkedChunk(hits=[hit])
 
-            # threshold reached and trigger point encountered, or timeout: flush "safe part" (P2: trigger regex avoids cutting sentences)
+            # threshold reached with a trigger point, or timeout: flush the
+            # safe part (P2: the trigger regex avoids cutting sentences)
             if ((len(buffer) >= self._flush_threshold and _FLUSH_TRIGGER_RE.search(buffer))
                     or (now - last_flush > self._flush_timeout)):
                 safe, pending = self._rtrim_partial_marker(buffer)
                 if safe:
-                    yield await flush(safe)
+                    yield MarkedChunk(text=safe)
                     buffer = pending
                     last_flush = now
+
+        # Natural end (no finish chunk): the LLMSourceProtocol explicitly
+        # allows it. Treat it as an implicit finish so the buffered tail
+        # is never dropped silently.
+        async for out in self._drain_buffer(buffer):
+            yield out
+        yield MarkedChunk(finish=True)

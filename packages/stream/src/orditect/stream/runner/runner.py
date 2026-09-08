@@ -32,11 +32,17 @@ from orditect.stream.core import CancellationToken
 from orditect.stream.disconnect import DisconnectMonitor, GraceBuffer
 from orditect.stream.enrich import EnrichManager, PlaceholderRegistry
 from orditect.stream.events import (
+    ErrorCode,
     EventEnvelope,
     EventType,
     make_stream_cancelled,
     make_stream_end,
+    make_stream_error,
     make_stream_start,
+)
+from orditect.stream.exceptions import (
+    StreamTruncatedError,
+    StructuredStreamError,
 )
 from orditect.stream.finalizer import ManifestBuilder
 from orditect.stream.mux import StreamMux
@@ -64,7 +70,7 @@ class StreamRunner:
         config: StreamConfig,
         *,
         manifest_builder: ManifestBuilder | None = None,
-        governor: ResourceGovernorProtocol | None = None,  # 新增
+        governor: ResourceGovernorProtocol | None = None,
         max_id: int = 1,
         loading_url: str = "",
         finalizer_hooks: list | None = None,
@@ -76,7 +82,7 @@ class StreamRunner:
         self._cfg = config
         self._max_id = max_id
         self._hooks = hooks
-        self._governor = governor  # 新增
+        self._governor = governor
 
         # mux
         self._mux = StreamMux(
@@ -96,7 +102,7 @@ class StreamRunner:
             registry=self._registry,
             loading_url=loading_url,
             hooks=hooks,
-            cancel_tokens=self._cancel_tokens,  # 共享映射引用
+            cancel_tokens=self._cancel_tokens,  # shared mapping reference
         )
         # finalizer (dependency injection, create default if not provided)
         self._manifest_builder = manifest_builder or ManifestBuilder(
@@ -114,7 +120,7 @@ class StreamRunner:
         self._stream_ids: list[str] = []
         self._executors: list[StreamExecutor] = []
         self._executor_tasks: list[asyncio.Task] = []
-        self._started = False  # v0.3.2（#24）：一次性对象防护
+        self._started = False  # v0.3.2 (#24): single-use guard
 
     # ---- disconnect interface (called by fastapi layer) ----
     async def notify_disconnect(self) -> None:
@@ -355,13 +361,13 @@ class StreamRunner:
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     logger.error("producer did not finish after cascade cancel")
             else:
-                await producer  # 传播生产者异常（正常完成路径）
+                await producer  # propagate producer exceptions (normal completion path)
             await self._monitor.close()
 
     async def _produce(self) -> None:
         """Producer: concurrently execute substreams → settle → manifest → end → close mux."""
         stream_results: dict[str, StreamResult] = {}
-        started_at = time.monotonic()  # v0.3.1：记录起点（on_stream_end 真实时长）
+        started_at = time.monotonic()  # v0.3.1: start mark (real duration for on_stream_end)
         try:
             # execute substreams concurrently
             self._executors = [
@@ -371,8 +377,8 @@ class StreamRunner:
                     config=self._cfg,
                     mux=self._mux,
                     on_hit=self._enrich_manager.on_hit,
-                    governor=self._governor,  # 新增
-                    cancel_token=self._cancel_tokens[sid],  # 新增
+                    governor=self._governor,
+                    cancel_token=self._cancel_tokens[sid],
                 )
                 for sid in self._stream_ids
             ]
@@ -392,10 +398,33 @@ class StreamRunner:
                     })
                     stream_results[sid] = sr
                 elif isinstance(res, Exception):
-                    # substream failed: record error (manifest summary)
+                    # substream failed: record the error in the manifest AND
+                    # emit a machine-readable stream.error event. Previously
+                    # the failure only surfaced inside manifest.errors, so a
+                    # consumer that never reads the manifest archived a
+                    # partial body as a success. "stream.end stays the only
+                    # terminal signal": the event order error -> manifest ->
+                    # end is preserved.
+                    if isinstance(res, StructuredStreamError):
+                        code = ErrorCode.INTERNAL
+                        retryable = res.retryable
+                    elif isinstance(res, StreamTruncatedError):
+                        code = ErrorCode.UPSTREAM_INTERRUPTED
+                        retryable = False
+                    else:
+                        code = ErrorCode.INTERNAL
+                        retryable = False
                     sr = StreamResult(stream_id=sid)
-                    sr.errors.append({"code": "INTERNAL", "message": str(res)})
+                    sr.errors.append({"code": code.value, "message": str(res)})
                     stream_results[sid] = sr
+                    try:
+                        await self._mux.emit(
+                            sid, EventType.STREAM_ERROR,
+                            make_stream_error(code, str(res), retryable=retryable),
+                        )
+                    except Exception:
+                        pass
+                    await self._call_hook("on_error", sid, code.value, str(res))
                 else:
                     stream_results[sid] = res
 
@@ -418,7 +447,6 @@ class StreamRunner:
 
         except Exception as e:
             # producer exception: deliver error event (best effort)
-            from orditect.stream.events import ErrorCode, make_stream_error
             for sid in self._stream_ids:
                 try:
                     await self._mux.emit(

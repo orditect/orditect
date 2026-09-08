@@ -1,4 +1,3 @@
-
 """GovernedLLMClient: OpenAI-compatible endpoint bridge (endpoint tier).
 
 Wraps any OpenAI-compatible chat-completions endpoint in the governed-call

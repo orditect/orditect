@@ -5,7 +5,7 @@ whatever .env points at) and pin the termination classification and audit
 evidence against real wire behavior. They are skipped automatically when
 no endpoint is configured, so CI without credentials stays green.
 
-Required .env keys (examples/deep_research/.env or project root .env):
+Required .env keys (package root .env or repo root .env):
     LLM_BASE_URL   e.g. https://dashscope.aliyuncs.com/compatible-mode/v1
     LLM_API_KEY
     LLM_PUBLISH_MODEL (fallback: LLM_RESEARCH_MODEL, LLM_WRITING_MODEL)
@@ -21,24 +21,27 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
-from orditect.adapter.memory import MemoryStore
 from orditect.bridge.openai import GovernedLLMClient
 
 pytestmark = pytest.mark.live
 
+# .env discovery: explicit LLM_ENV_FILE wins; otherwise probe the usual
+# locations (package root, repo root, CWD).
 _ENV_CANDIDATES = []
 if os.getenv("LLM_ENV_FILE"):
     _ENV_CANDIDATES.append(Path(os.environ["LLM_ENV_FILE"]))
 _here = Path(__file__).resolve()
 _ENV_CANDIDATES += [
-    _here.parents[2] / ".env",   # package root (bridge-openai/.env)
-    _here.parents[3] / ".env",   # repo root (.env)
+    _here.parents[1] / ".env",   # package root (bridge-openai/.env)
+    _here.parents[2] / ".env",   # packages/ root
+    _here.parents[3] / ".env",   # repo root
     Path.cwd() / ".env",
 ]
 for _p in _ENV_CANDIDATES:
     if _p.is_file():
         load_dotenv(_p)
         break
+
 _BASE_URL = os.getenv("LLM_BASE_URL")
 _API_KEY = os.getenv("LLM_API_KEY")
 _MODEL = (os.getenv("LLM_PUBLISH_MODEL")
@@ -78,6 +81,7 @@ class _ListAuditWriter:
     @property
     def events(self) -> list[dict]:
         return [getattr(e, "payload", e) for e in self.records]
+
 
 def _live_client(audit: _ListAuditWriter, **kwargs) -> GovernedLLMClient:
     return GovernedLLMClient(

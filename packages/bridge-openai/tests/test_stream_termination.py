@@ -103,8 +103,7 @@ class TestTerminationClassification:
     @pytest.mark.asyncio
     async def test_zero_chunks_raises_empty(self):
         """A 200 with zero frames is an endpoint incompatibility."""
-        async with FakeSSEServer(_sse_lines(done=True).replace(
-                "data: [DONE]\n\n", "")) as s:
+        async with FakeSSEServer("") as s:
             client = _make_client(s)
             with pytest.raises(StreamEmptyError):
                 async for _ in client.stream(

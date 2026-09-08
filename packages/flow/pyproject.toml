@@ -52,7 +52,6 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
-    "unit: pure logic tests (in-memory infra, no Redis)",
-    "integration: integration tests (require Redis)",
-    "examples: example tests",
+    "unit: pure logic tests, no external dependencies",
+    "integration: integration tests (require Redis/taskflow)",
 ]
