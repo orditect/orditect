@@ -166,26 +166,55 @@ class EnrichManager:
 
     # ---- settle window ----
     async def settle(self, timeout: float) -> None:
-        """Wait for settle window: when resolved within window, emit enrich.resolved events.
+        """Settle window: emit enrich.resolved for every placeholder
+        that resolved without an emitted event.
 
-        Timeout handling branches by mode:
-        - local mode: no delegation channel; upon timeout, mark failed + fallback_url (loading image),
-          truthfully reflected in manifest. Previously kept pending with the illusion that "client can poll
-          using local: reference", but that namespace always fails resolution on resolver side (job_id used
-          to query stream_id's manifest) — delegation channel does not exist, so stop misleading.
-        - taskflow mode: keep pending (manifest annotates tf: reference, client ManifestResolver polls
-          by deterministic task_id).
+        Two paths produce a resolved record:
+          1. still pending when settle runs -> wait_one within the
+             window, then emit;
+          2. ALREADY resolved before settle runs (a fast enricher on a
+             long stream: the dispatch task finished while the stream
+             was still flowing) -> the record left pending() before
+             settle, so path 1 never sees it. Emit for these too, or a
+             fast enricher on a slow stream never publishes.
         """
+        # Path 2 first: resolved but never emitted (no event flag on the
+        # record, so track emission here).
+        emitted = getattr(self, "_emitted_resolved", None)
+        if emitted is None:
+            emitted = self._emitted_resolved = set()
+        for rec in self._registry.all():
+            if (rec.state is PlaceholderState.RESOLVED and rec.url
+                    and rec.placeholder_id not in emitted):
+                await self._mux.emit(
+                    rec.stream_id, EventType.ENRICH_RESOLVED,
+                    make_enrich_resolved(
+                        placeholder_id=rec.placeholder_id,
+                        url=rec.url,
+                        state=PlaceholderState.RESOLVED,
+                    ),
+                    stage=rec.stage,
+                )
+                emitted.add(rec.placeholder_id)
+                await self._call_hook(
+                    "on_resolved", rec.stream_id, rec.placeholder_id,
+                    rec.elapsed() or 0.0,
+                )
+
         if timeout <= 0:
             return
+        # Path 1: still pending — wait within the window, then emit.
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         for rec in list(self._registry.pending()):
             remaining = deadline - loop.time()
             if remaining <= 0:
                 break
-            final = await self._registry.wait_one(rec.placeholder_id, remaining)
-            if final and final.state is PlaceholderState.RESOLVED and final.url:
+            final = await self._registry.wait_one(rec.placeholder_id,
+                                                  remaining)
+            if (final and final.state is PlaceholderState.RESOLVED
+                    and final.url
+                    and final.placeholder_id not in emitted):
                 await self._mux.emit(
                     final.stream_id, EventType.ENRICH_RESOLVED,
                     make_enrich_resolved(
@@ -195,12 +224,13 @@ class EnrichManager:
                     ),
                     stage=final.stage,
                 )
+                emitted.add(final.placeholder_id)
                 await self._call_hook(
                     "on_resolved", final.stream_id, final.placeholder_id,
                     final.elapsed() or 0.0,
                 )
 
-        # v0.3.2: local mode timeout marks failed (no delegation channel, reflect truthfully)
+        # local mode timeout marks failed (no delegation channel).
         if self._cfg.enrich_mode is not EnrichMode.TASKFLOW:
             for rec in self._registry.pending():
                 await self._registry.mark_failed(
