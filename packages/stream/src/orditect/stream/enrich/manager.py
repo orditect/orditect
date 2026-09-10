@@ -133,11 +133,17 @@ class EnrichManager:
         return f"local:{placeholder_id}"
 
     async def _dispatch_local(
-        self,
-        record: PlaceholderRecord,
-        cancel_token: CancellationToken | None = None,
+            self,
+            record: PlaceholderRecord,
+            cancel_token: CancellationToken | None = None,
     ) -> None:
-        """Local mode: call enricher in local coroutine, write result back to registry."""
+        """Local mode: call enricher in local coroutine, write result back to registry.
+
+        Eager mode (config.enrich_eager): emit enrich.resolved as soon
+        as the placeholder resolves — the image splices into the live
+        stream instead of waiting for the settle window. The settle
+        window then only bounds late resolutions after stream end.
+        """
         try:
             req = EnrichRequest(
                 placeholder_id=record.placeholder_id,
@@ -148,6 +154,21 @@ class EnrichManager:
             result = await self._enricher.resolve(req, cancel_token=cancel_token)
             if result.state is PlaceholderState.RESOLVED:
                 await self._registry.mark_resolved(record.placeholder_id, result.url, result.meta)
+                if getattr(self._cfg, "enrich_eager", False) and result.url:
+                    await self._mux.emit(
+                        record.stream_id, EventType.ENRICH_RESOLVED,
+                        make_enrich_resolved(
+                            placeholder_id=record.placeholder_id,
+                            url=result.url,
+                            state=PlaceholderState.RESOLVED,
+                        ),
+                        stage=record.stage,
+                    )
+                    self._mark_emitted(record.placeholder_id)
+                    await self._call_hook(
+                        "on_resolved", record.stream_id,
+                        record.placeholder_id, 0.0,
+                    )
             else:
                 await self._registry.mark_failed(
                     record.placeholder_id, "enricher returned failed", self._loading_url
@@ -164,54 +185,34 @@ class EnrichManager:
         finally:
             self._enrich_tasks.pop(record.placeholder_id, None)
 
-    # ---- settle window ----
-    async def settle(self, timeout: float) -> None:
-        """Settle window: emit enrich.resolved for every placeholder
-        that resolved without an emitted event.
-
-        Two paths produce a resolved record:
-          1. still pending when settle runs -> wait_one within the
-             window, then emit;
-          2. ALREADY resolved before settle runs (a fast enricher on a
-             long stream: the dispatch task finished while the stream
-             was still flowing) -> the record left pending() before
-             settle, so path 1 never sees it. Emit for these too, or a
-             fast enricher on a slow stream never publishes.
-        """
-        # Path 2 first: resolved but never emitted (no event flag on the
-        # record, so track emission here).
+    def _mark_emitted(self, placeholder_id: str) -> None:
         emitted = getattr(self, "_emitted_resolved", None)
         if emitted is None:
             emitted = self._emitted_resolved = set()
-        for rec in self._registry.all():
-            if (rec.state is PlaceholderState.RESOLVED and rec.url
-                    and rec.placeholder_id not in emitted):
-                await self._mux.emit(
-                    rec.stream_id, EventType.ENRICH_RESOLVED,
-                    make_enrich_resolved(
-                        placeholder_id=rec.placeholder_id,
-                        url=rec.url,
-                        state=PlaceholderState.RESOLVED,
-                    ),
-                    stage=rec.stage,
-                )
-                emitted.add(rec.placeholder_id)
-                await self._call_hook(
-                    "on_resolved", rec.stream_id, rec.placeholder_id,
-                    rec.elapsed() or 0.0,
-                )
+        emitted.add(placeholder_id)
 
+    # ---- settle window ----
+    async def settle(self, timeout: float) -> None:
+        """Wait for settle window: when resolved within window, emit enrich.resolved events.
+
+        Timeout handling branches by mode:
+        - local mode: no delegation channel; upon timeout, mark failed + fallback_url (loading image),
+          truthfully reflected in manifest. Previously kept pending with the illusion that "client can poll
+          using local: reference", but that namespace always fails resolution on resolver side (job_id used
+          to query stream_id's manifest) — delegation channel does not exist, so stop misleading.
+        - taskflow mode: keep pending (manifest annotates tf: reference, client ManifestResolver polls
+          by deterministic task_id).
+        """
         if timeout <= 0:
             return
-        # Path 1: still pending — wait within the window, then emit.
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         for rec in list(self._registry.pending()):
             remaining = deadline - loop.time()
             if remaining <= 0:
                 break
-            final = await self._registry.wait_one(rec.placeholder_id,
-                                                  remaining)
+            final = await self._registry.wait_one(rec.placeholder_id, remaining)
+            emitted = getattr(self, "_emitted_resolved", set())
             if (final and final.state is PlaceholderState.RESOLVED
                     and final.url
                     and final.placeholder_id not in emitted):
@@ -224,13 +225,13 @@ class EnrichManager:
                     ),
                     stage=final.stage,
                 )
-                emitted.add(final.placeholder_id)
+                self._mark_emitted(final.placeholder_id)
                 await self._call_hook(
                     "on_resolved", final.stream_id, final.placeholder_id,
                     final.elapsed() or 0.0,
                 )
 
-        # local mode timeout marks failed (no delegation channel).
+        # v0.3.2: local mode timeout marks failed (no delegation channel, reflect truthfully)
         if self._cfg.enrich_mode is not EnrichMode.TASKFLOW:
             for rec in self._registry.pending():
                 await self._registry.mark_failed(

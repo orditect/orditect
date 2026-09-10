@@ -53,6 +53,11 @@ class StreamConfig:
     on_disconnect: DisconnectPolicy = DisconnectPolicy.GRACE
     grace_period: float = 30.0
     enrich_settle_timeout: float = 5.0
+    # Eager enrichment: emit enrich.resolved the moment a placeholder
+    # resolves (mid-stream), instead of waiting for the settle window.
+    # The settle window then only bounds LATE resolutions after the
+    # stream ends (timeout -> enrich.expired).
+    enrich_eager: bool = True
     heartbeat_interval: float = 15.0
     queue_maxsize: int = 1000
     backpressure: BackpressurePolicy = BackpressurePolicy.BLOCK
