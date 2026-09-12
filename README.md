@@ -129,19 +129,19 @@ recursive composition, DAG observability, SSE output, HITL, budget
 settlement, and the recovery plane — lives at
 [`examples/README.md`](examples/README.md).
 
-## Documentation
+## Documentationtermsterms
 
-| Document | Description |
-| :--- | :--- |
-| [Design Principles](docs/PRINCIPLES.md) | The Three Core Contracts and cross‑cutting design invariants. |
-| [Roadmap](docs/ROADMAP.md) | Upcoming milestones, version philosophy, and what we will not do. |
-| [Protocol Terms](packages/protocol/docs/terms.md) | Normative T‑terms (T1–T11) with enforcement and verification. |
-| [Core Lua Contract](packages/core/docs/lua_contract.md) | Frozen ARGV specs for all 10 Lua scripts. |
-| [Flow Recovery](packages/flow/docs/recovery.md) | Resume / rerun design, execution dispatch, and pause semantics. |
-| [Stream Protocol](packages/stream/docs/protocol.md) | SSE event schema, cancel sequences, and pause/resume decisions. |
-| [Adapter Guide](packages/protocol/README.md) | How to implement a storage adapter and run the conformance suite. |
+| Document | Description                                                                    |
+| :--- |:-------------------------------------------------------------------------------|
+| [Design Principles](docs/PRINCIPLES.md) | The Three Core Contracts and cross‑cutting design invariants.                  |
+| [Roadmap](docs/ROADMAP.md) | Upcoming milestones, version philosophy, and what we will not do.              |
+| [Protocol Terms](packages/protocol/docs/terms.md) | Normative T‑terms (T1–T12) with enforcement and verification.                  |
+| [Core Lua Contract](packages/core/docs/lua_contract.md) | Frozen ARGV specs for all 10 Lua scripts.                                      |
+| [Flow Recovery](packages/flow/docs/recovery.md) | Resume / rerun design, execution dispatch, and pause semantics.                |
+| [Stream Protocol](packages/stream/docs/protocol.md) | SSE event schema, cancel sequences, and pause/resume decisions.                |
+| [Adapter Guide](packages/protocol/README.md) | How to implement a storage adapter and run the conformance suite.              |
 | [Stability Commitments](docs/stability.md) | What you may rely on across releases (frozen / stable / ratifying / internal). |
-| [Integration Guide](docs/integration-guide.md) | Three-category integration with certification checklist. |
+| [Integration Guide](docs/integration-guide.md) | Three-category integration with certification checklist.                       |
 ---
 
 ## Installation
@@ -243,15 +243,15 @@ print(record["status"], record.get("result"))
 
 ## 文档导航
 
-| 文档 | 说明 |
-| :--- | :--- |
-| [设计原则](docs/PRINCIPLES.md) | 三大底层契约与贯穿全栈的设计不变量。 |
-| [路线图](docs/ROADMAP.md) | 后续里程碑、版本理念及明确不做的事项。 |
-| [协议条款](packages/protocol/docs/terms.md) | 规范级 T 条款（T1–T11），含执行约束与验证方式。 |
-| [Core Lua 契约](packages/core/docs/lua_contract.md) | 全部 10 个 Lua 脚本的冻结 ARGV 规格。 |
+| 文档 | 说明                           |
+| :--- |:-----------------------------|
+| [设计原则](docs/PRINCIPLES.md) | 三大底层契约与贯穿全栈的设计不变量。           |
+| [路线图](docs/ROADMAP.md) | 后续里程碑、版本理念及明确不做的事项。          |
+| [协议条款](packages/protocol/docs/terms.md) | 规范级 T 条款（T1–T12），含执行约束与验证方式。 |
+| [Core Lua 契约](packages/core/docs/lua_contract.md) | 全部 10 个 Lua 脚本的冻结 ARGV 规格。   |
 | [Flow 恢复平面](packages/flow/docs/recovery.md) | Resume / rerun 设计、执行派发与暂停语义。 |
-| [Stream 协议](packages/stream/docs/protocol.md) | SSE 事件模式、取消序列与暂停/恢复决策。 |
-| [适配器开发指南](packages/protocol/README.md) | 如何实现存储适配器并运行符合性套件。 |
+| [Stream 协议](packages/stream/docs/protocol.md) | SSE 事件模式、取消序列与暂停/恢复决策。       |
+| [适配器开发指南](packages/protocol/README.md) | 如何实现存储适配器并运行符合性套件。           |
 
 ---
 

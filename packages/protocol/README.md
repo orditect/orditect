@@ -39,7 +39,7 @@ results go.
 3. **Zero business semantics** — no WHERE-style business query DSL; only
    mechanism fields (time range, pagination, status-as-opaque-string).
 
-## The four domains
+## The five domains
 
 Each domain is a narrow sink/query protocol pair. An implementation declares
 the half-domains it supports via `CapabilitySet`; the rest must raise
@@ -54,7 +54,7 @@ the half-domains it supports via `CapabilitySet`; the rest must raise
 | Dependency | `DependencyWriter` | `DependencyReader` | Pure-edge dependency facts + graph queries (T12) |
 ## Consistency terms
 
-Eleven normative terms (lease model, terminal irreversibility, idempotency,
+Twelve normative terms (lease model, terminal irreversibility, idempotency,
 pointer discipline, vocabulary neutrality, clock discipline, explicit
 capability, observation non-blocking, concurrency atomicity, execution
 identity alignment, cross-media alignment) are frozen in

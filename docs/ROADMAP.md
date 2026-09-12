@@ -151,7 +151,7 @@ We welcome contributions in these areas:
 - **Diagnostic experience**: Share real‑world AI system failure stories to help evolve the governance knowledge base.
 
 **Contribution path**:
-1. Read `orditect-protocol/docs/terms.md` to understand the 11 normative terms.
+1. Read `orditect-protocol/docs/terms.md` to understand the 12 normative terms.
 2. Run the conformance suite to ensure changes don’t break contracts.
 3. Open an issue or pull request – structural changes (model fields, Lua ARGV) must follow the version review process.
 

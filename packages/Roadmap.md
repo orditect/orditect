@@ -19,16 +19,16 @@ At its core, AI is a probabilistic engine – as long as LLMs output probability
 
 ## Current Status (v0.1.0 Alpha)
 
-| Module | Status | Notes |
-| :--- | :--- | :--- |
-| `orditect-protocol` | ✅ Implemented | Four domains, 8 protocols, 11 specification clauses, conformance suite baseline. |
-| `orditect-core` | ✅ Implemented | Redis + Lua atomic operations, semaphores, lease model, `reopen` primitive. |
-| `orditect-flow` | ✅ Implemented | Recursive composition, cascading cancellation, resource exemption, `RecoveryService`. |
-| `orditect-stream` | ✅ Implemented | Golden SSE protocol, rich media placeholders, disconnect strategies. |
-| `orditect-adapter-memory` | ✅ Implemented | Reference implementation, passes conformance suite. |
-| Conformance Suite Coverage | ⚠️ Baseline | 2-5 cases per domain; will expand with PG adapter development. |
-| `DelayedScheduler` | ⚠️ Skeleton | Interface only; production use requires APScheduler/Celery. |
-| SSE journal replay | ⚠️ Reserved | Protocol anchor frozen; replay logic not yet implemented. |
+| Module | Status | Notes                                                                                        |
+| :--- | :--- |:---------------------------------------------------------------------------------------------|
+| `orditect-protocol` | ✅ Implemented | Five domains, 8 protocols, 12 specification clauses, conformance suite baseline.             |
+| `orditect-core` | ✅ Implemented | Redis + Lua atomic operations, semaphores, lease model, `reopen` primitive.                  |
+| `orditect-flow` | ✅ Implemented | Recursive composition, cascading cancellation, resource exemption, `RecoveryService`.        |
+| `orditect-stream` | ✅ Implemented | Golden SSE protocol, rich media placeholders, disconnect strategies.                         |
+| `orditect-adapter-memory` | ✅ Implemented | Reference implementation, passes conformance suite.                                          |
+| Conformance Suite Coverage | ⚠️ Baseline | 2-5 cases per domain; will expand with PG adapter development.                               |
+| `DelayedScheduler` | ⚠️ Skeleton | Interface only; production use requires APScheduler/Celery.                                  |
+| SSE journal replay | ⚠️ Reserved | Protocol anchor frozen; replay logic not yet implemented.                                    |
 | Suspend/Pause mechanism | 📋 v0.2.0 | Current semantic: pause = cancel + resume; v0.2.0 will introduce vocabulary-neutral suspend. |
 
 ---
@@ -167,7 +167,7 @@ We welcome contributions in the following areas:
 3. **Diagnostic experience**: Share real‑world AI system failure stories to help evolve the governance knowledge base.
 
 **Contribution Path**:
-- Read `protocol/docs/terms.md` to understand the 11 specification clauses.
+- Read `protocol/docs/terms.md` to understand the 12 specification clauses.
 - Run the conformance suite to ensure changes don’t break contracts.
 - Any structural change (model fields, Lua ARGV) must follow the version review process.
 
