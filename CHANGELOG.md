@@ -4,6 +4,20 @@
 
 **v0.1.7 = delivery + correctness release.**
 
+### Fixed (orchestration)
+
+- **flow: `submit` no longer resets the generation chain for reopened
+  tasks.** An existing record that is still in its initial status (e.g.
+  produced by `reopen_task` or by a direct `storage.initialize_task`
+  call) is now scheduled WITHOUT re-initialization, so
+  `previous_execution_ids` and the reopen-assigned `execution_id` are
+  preserved (T11). Previously, `submit` unconditionally re-initialized
+  the record, wiping the chain `reopen_task` had just advanced.
+  `if_not_exists=True` semantics are unchanged: any existing record (any
+  status) is skipped entirely. New pins in
+  `tests/integration/test_submit_after_reopen.py` and
+  `tests/unit/test_submit_schedule_only.py`.
+- 
 ### Fixed (delivery)
 
 - **bridge-openai: declare `orditect-stream` as a runtime dependency** —

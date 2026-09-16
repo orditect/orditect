@@ -44,6 +44,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `execution_id`. Fixes a T11 race where the old generation's cancelled
   snapshot was written into the new generation (and the old one lost).
 
+- `TaskOrchestrator.submit`: an existing record still in its initial
+  status (e.g. produced by `reopen_task` or a direct
+  `storage.initialize_task` call) is now scheduled WITHOUT
+  re-initialization — the generation chain (`previous_execution_ids` /
+  reopen-assigned `execution_id`, T11) is preserved instead of being
+  silently reset (submit-after-reopen chain loss). `if_not_exists=True`
+  semantics unchanged (any existing record is skipped entirely). New pins
+  in `tests/integration/test_submit_after_reopen.py` and
+  `tests/unit/test_submit_schedule_only.py`.
+
 ## [0.1.6] - TBD
 
 ### Fixed

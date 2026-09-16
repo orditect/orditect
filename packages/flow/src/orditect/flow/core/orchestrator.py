@@ -40,22 +40,28 @@ def _retrieve_bg_error(task: "asyncio.Task") -> None:
 class TaskOrchestrator:
     """Task orchestrator (manages the complete lifecycle of tasks).
 
-    Changes:
-    - R6-2: submit automatically injects parent_task_id within the task execution context
-      (asyncio.create_task copies context, nested submit has zero boilerplate).
-      Explicit parent_task_id takes precedence over auto-injection.
-    - R6-3: cancel / terminate cascade along lineage (self first, then children recursively).
-      Cascade depth limit _MAX_CASCADE_DEPTH prevents cycles.
-    - N1: submit supports if_not_exists idempotency.
-    - R17-a: background task strong reference prevents GC.
-    - dependency_governor: v0.1.1 passive dependency-governance
-        hookup. NOTE: injecting it here only ATTACHES it — no
-        internal code path uses it automatically (orchestration
-        independence: the executor never emits dependency
-        notifications). Callers must wire notify_task_terminal()
-        at their own task-closure points (composition root /
-        bridge layer).
-    """
+        Changes:
+        - R6-2: submit automatically injects parent_task_id within the task execution context
+          (asyncio.create_task copies context, nested submit has zero boilerplate).
+          Explicit parent_task_id takes precedence over auto-injection.
+        - R6-3: cancel / terminate cascade along lineage (self first, then children recursively).
+          Cascade depth limit _MAX_CASCADE_DEPTH prevents cycles.
+        - N1: submit supports if_not_exists idempotency.
+        - submit schedule-only: an existing record that is still in its initial
+          status (e.g. produced by reopen_task or by a direct
+          storage.initialize_task call) is scheduled WITHOUT re-initialization,
+          preserving the generation chain (previous_execution_ids /
+          reopen-assigned execution_id, T11). if_not_exists=True semantics are
+          unchanged: any existing record (any status) is skipped entirely.
+        - R17-a: background task strong reference prevents GC.
+        - dependency_governor: v0.1.1 passive dependency-governance
+            hookup. NOTE: injecting it here only ATTACHES it — no
+            internal code path uses it automatically (orchestration
+            independence: the executor never emits dependency
+            notifications). Callers must wire notify_task_terminal()
+            at their own task-closure points (composition root /
+            bridge layer).
+        """
 
     def __init__(
             self,
@@ -99,6 +105,15 @@ class TaskOrchestrator:
             parent_task_id: Parent task ID. When None, automatically reads from current execution context
                 (R6-2: auto-register lineage when submitting within parent task's execute());
                 explicit parameter takes precedence; top-level call (no context) becomes root task.
+            if_not_exists: Idempotency switch. When True, an existing record
+                (any status) is skipped entirely and never re-executed.
+                When False (default): an existing record still in its initial
+                status (e.g. produced by reopen_task or by a direct
+                storage.initialize_task call) is scheduled WITHOUT
+                re-initialization, preserving its generation chain
+                (previous_execution_ids / execution_id, T11); an existing
+                record in any other status is re-initialized per the pinned
+                legacy overwrite semantics.
         """
         if task_id is None:
             task_id = f"task-{uuid.uuid4().hex[:12]}"
@@ -107,11 +122,40 @@ class TaskOrchestrator:
         if parent_task_id is None:
             parent_task_id = current_task_id.get()
 
-        created = await self.lifecycle.initialize(
-            task_id, metadata,
-            parent_task_id=parent_task_id,
-            if_not_exists=if_not_exists,
-        )
+        if if_not_exists:
+            # Idempotent path: the atomic skip in task_init.lua decides;
+            # an existing record (any status) is never re-executed.
+            created = await self.lifecycle.initialize(
+                task_id, metadata,
+                parent_task_id=parent_task_id,
+                if_not_exists=True,
+            )
+        else:
+            try:
+                existing = await self.storage.get_task(task_id)
+            except (TaskNotFoundError, KeyError):
+                # The storage contract is "missing task returns an empty
+                # dict"; non-conformant doubles may raise instead — treat
+                # both as "record missing".
+                existing = {}
+            if existing and existing.get("status") == TaskStatus.PENDING.value:
+                # The record already carries a generation identity (T11):
+                # re-initializing would overwrite previous_execution_ids and
+                # orphan the execution_id assigned by reopen_task.
+                if metadata:
+                    await self.storage.update_task(task_id, {"metadata": metadata})
+                logger.debug(
+                    f"Task already initialized, schedule only "
+                    f"(generation chain preserved): {task_id}"
+                )
+                created = True
+            else:
+                created = await self.lifecycle.initialize(
+                    task_id, metadata,
+                    parent_task_id=parent_task_id,
+                    if_not_exists=False,
+                )
+
         if not created:
             logger.info(f"Task already exists, skip submit (idempotent): {task_id}")
             return task_id
