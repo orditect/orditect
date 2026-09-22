@@ -1,0 +1,41 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to publish (subdirectory under packages/)"
+        required: true
+        type: choice
+        options:
+          - protocol
+          - core
+          - flow
+          - stream
+          - adapter-memory
+          - adapter-local
+          - adapter-ui
+          - bridge-openai
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tools
+        run: python -m pip install -U build twine
+      - name: Build sdist and wheel
+        run: python -m build packages/${{ inputs.package }}
+      - name: Check metadata
+        run: twine check packages/${{ inputs.package }}/dist/*
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/${{ inputs.package }}/dist/
