@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.1.7"
 description = "OpenAI-compatible endpoint bridge for the Orditect ecosystem: governed LLM calls with audit, budget, and observability (bridge reference implementation)"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     { name = "Orditect Contributors" },
 ]
@@ -26,6 +27,10 @@ dependencies = [
     "orditect-stream>=0.1.7,<0.2",
 ]
 
+[project.urls]
+Homepage = "https://github.com/orditect/orditect"
+Repository = "https://github.com/orditect/orditect"
+
 [project.optional-dependencies]
 test = [
     "pytest>=8.0",
@@ -33,6 +38,7 @@ test = [
     "python-dotenv>=1.0",
     "orditect-adapter-memory>=0.1.7,<0.2",
 ]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 namespaces = true
